@@ -1,26 +1,28 @@
 /*!
- * arc-bridge-kit v0.1.0
- * Drop-in "bridge USDC to Arc" kit built on Circle CCTP V2 + Forwarding Service.
+ * arc-bridge-kit v0.2.0
+ * Drop-in "pay with anything, land USDC on Arc, then buy" kit.
  *
- *  - One signature on the source chain (plus a one-time USDC approval). Circle's
- *    Forwarding Service submits the mint on Arc, so the user needs NO gas on Arc.
+ *  Legs (each optional except the bridge):
+ *    1. SWAP   any token -> USDC on the source chain, via LI.FI's same-chain quote
+ *    2. BRIDGE USDC -> Arc via Circle CCTP V2 + Forwarding Service (one signature, no gas on Arc)
+ *               — or, the moment LI.FI opens routes into Arc, a single LI.FI cross-chain route
+ *                 (router: "auto" probes it per quote and falls back to CCTP)
+ *    3. BUY    a host-built transaction on Arc with the USDC that landed (e.g. launchpad buy)
+ *
  *  - Fast Transfer (finality threshold 1000, ~20 s) or Standard (2000, no protocol fee).
- *  - Resumable: pending transfers are persisted in localStorage and picked up after
- *    a page refresh. If the forwarder ever stalls, the attested message can be
- *    minted manually via receiveMessage on Arc.
+ *  - Resumable: transfers are persisted in localStorage; a refresh picks them up, a swapped
+ *    but not yet bridged amount can be continued, a late forwarder can be minted manually.
  *
  *  Usage (browser, classic script):
  *    <script src="ethers.umd.min.js"></script>
  *    <script src="arc-bridge-kit.js"></script>
- *    const kit = ArcBridgeKit.mount(document.getElementById("bridge"), {
- *      ethers: window.ethers,
- *      network: "testnet",                     // or "mainnet"
- *      getProvider: () => window.ethereum,     // any EIP-1193 provider (MetaMask, Web3Auth...)
+ *    ArcBridgeKit.mount(document.getElementById("bridge"), {
+ *      ethers: window.ethers, network: "testnet", getProvider: () => window.ethereum,
  *    });
  *
- *  Headless (no UI):  const core = new ArcBridgeKit.ArcBridge({ ethers, network, provider });
+ *  Headless: new ArcBridgeKit.ArcBridge({ ethers, network, provider })
  *
- * Contract addresses and domain IDs verified against Circle docs + live RPCs, Sep 2026.
+ * Contract addresses, domain IDs and LI.FI behaviour verified live, Sep 2026.
  * No dependencies besides ethers v6 (passed in, never bundled).
  */
 (function (root, factory) {
@@ -29,12 +31,13 @@
 })(typeof self !== "undefined" ? self : this, function () {
   "use strict";
 
-  const VERSION = "0.1.0";
+  const VERSION = "0.2.0";
 
   // ------------------------------------------------------------------ constants
 
   const ARC_DOMAIN = 26;
   const ZERO32 = "0x" + "0".repeat(64);
+  const NATIVE = "0x0000000000000000000000000000000000000000";
   // bytes32("cctp-forward"): tells Circle's Forwarding Service to relay the mint on Arc.
   const FORWARD_HOOK = "0x636374702d666f72776172640000000000000000000000000000000000000000";
   const FINALITY = { fast: 1000, standard: 2000 };
@@ -53,6 +56,9 @@
       iris: "https://iris-api-sandbox.circle.com",
     },
   };
+
+  // LI.FI: one API for mainnets and the testnets it lists (Sepolia, Base/OP/Arbitrum Sepolia).
+  const LIFI = { api: "https://li.quest/v1", integrator: "arc-bridge-kit" };
 
   // USDC on Arc is the native gas token; 0x3600...0000 is its ERC-20 face (6 decimals).
   const ARC = {
@@ -193,11 +199,17 @@
     ],
   };
 
+  // "Pay with" shortlist: the source chain's native coin and USDC always, then these symbols
+  // if LI.FI lists them on that chain (in this order).
+  const PAY_SYMBOLS = ["WETH", "USDT", "DAI", "cbBTC", "WBTC", "EURC", "cbETH", "wstETH", "weETH",
+    "USDbC", "AERO", "VIRTUAL", "DEGEN", "BRETT", "ARB", "OP", "LINK", "UNI", "AAVE", "PEPE", "WPOL", "WAVAX", "WS", "WMON"];
+
   const ABI = {
-    usdc: [
+    erc20: [
       "function approve(address spender, uint256 value) returns (bool)",
       "function allowance(address owner, address spender) view returns (uint256)",
       "function balanceOf(address owner) view returns (uint256)",
+      "function decimals() view returns (uint8)",
     ],
     tokenMessenger: [
       "function depositForBurnWithHook(uint256 amount, uint32 destinationDomain, bytes32 mintRecipient, address burnToken, bytes32 destinationCaller, uint256 maxFee, uint32 minFinalityThreshold, bytes hookData)",
@@ -211,6 +223,8 @@
 
   const ADDR_RE = /^0x[0-9a-fA-F]{40}$/;
   const isAddress = (a) => ADDR_RE.test(String(a || ""));
+  const sameAddr = (a, b) => String(a || "").toLowerCase() === String(b || "").toLowerCase();
+  const isNative = (a) => sameAddr(a, NATIVE);
 
   /** EVM address -> bytes32 mintRecipient. Strict: a malformed recipient is not a failed
    *  transaction, it is USDC minted to an address nobody controls. */
@@ -219,26 +233,29 @@
     return "0x" + "0".repeat(24) + String(addr).slice(2).toLowerCase();
   }
 
-  /** "10" / "10.5" / " 0.25 " -> USDC minor units (6 decimals) as BigInt. Throws on junk. */
-  function parseUsdc(input) {
+  /** "10" / "10.5" -> minor units as BigInt for a token with `decimals`. Throws on junk. */
+  function parseUnits(input, decimals = USDC_DECIMALS) {
     const s = String(input ?? "").trim().replace(",", ".");
     if (!/^\d*(\.\d*)?$/.test(s) || s === "" || s === ".") throw new Error("invalid amount");
     const [i, f = ""] = s.split(".");
-    if (f.length > USDC_DECIMALS) throw new Error("max 6 decimals");
-    return BigInt(i || "0") * 10n ** BigInt(USDC_DECIMALS) + BigInt((f + "000000").slice(0, USDC_DECIMALS));
+    if (f.length > decimals) throw new Error("max " + decimals + " decimals");
+    return BigInt(i || "0") * 10n ** BigInt(decimals) + BigInt((f + "0".repeat(decimals)).slice(0, decimals));
   }
+  const parseUsdc = (input) => parseUnits(input, USDC_DECIMALS);
 
   /** minor units -> "12.34" (trims trailing zeros, keeps at least 2 decimals) */
-  function formatUsdc(minor, maxDecimals = 6) {
+  function formatUnits(minor, decimals = USDC_DECIMALS, maxDecimals = 6) {
     const n = BigInt(minor);
     const neg = n < 0n;
     const abs = neg ? -n : n;
-    const i = abs / 1_000_000n;
-    let f = (abs % 1_000_000n).toString().padStart(6, "0").slice(0, maxDecimals);
+    const base = 10n ** BigInt(decimals);
+    const i = abs / base;
+    let f = (abs % base).toString().padStart(decimals, "0").slice(0, maxDecimals);
     f = f.replace(/0+$/, "");
     if (f.length < 2) f = f.padEnd(2, "0");
     return (neg ? "-" : "") + i.toString() + "." + f;
   }
+  const formatUsdc = (minor, maxDecimals = 6) => formatUnits(minor, USDC_DECIMALS, maxDecimals);
 
   const padUint = (n) => BigInt(n).toString(16).padStart(64, "0");
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -275,6 +292,29 @@
     };
   }
 
+  /** LI.FI transactionRequest -> ethers TransactionRequest (drop legacy gasPrice, keep gasLimit). */
+  function toTxRequest(t) {
+    if (!t || !t.to || !t.data) throw new Error("LI.FI quote has no transactionRequest");
+    const req = { to: t.to, data: t.data };
+    if (t.value != null) req.value = BigInt(t.value);
+    if (t.gasLimit != null) req.gasLimit = BigInt(t.gasLimit);
+    if (t.chainId != null) req.chainId = Number(t.chainId);
+    return req;
+  }
+
+  /** LI.FI token list for a chain -> the "pay with" shortlist (native first, USDC second). */
+  function payShortlist(tokens, chain) {
+    const list = Array.isArray(tokens) ? tokens : [];
+    const native = list.find((t) => isNative(t.address)) || { address: NATIVE, symbol: chain.native.symbol, name: chain.native.name, decimals: chain.native.decimals };
+    const usdc = { address: chain.usdc, symbol: "USDC", name: "USD Coin", decimals: USDC_DECIMALS };
+    const out = [native, usdc];
+    for (const sym of PAY_SYMBOLS) {
+      const t = list.find((x) => x.symbol === sym && !isNative(x.address) && !sameAddr(x.address, chain.usdc));
+      if (t) out.push({ address: t.address, symbol: t.symbol, name: t.name, decimals: Number(t.decimals) });
+    }
+    return out;
+  }
+
   // ------------------------------------------------------------------ JSON-RPC (read-only)
 
   async function jsonRpc(url, method, params = [], timeoutMs = 8000) {
@@ -309,13 +349,14 @@
     return r ? BigInt(r) : null;
   }
 
-  async function fetchJson(url, timeoutMs = 10000) {
+  async function fetchJson(url, timeoutMs = 10000, headers = {}) {
     const ctl = new AbortController();
     const t = setTimeout(() => ctl.abort(), timeoutMs);
     try {
-      const res = await fetch(url, { signal: ctl.signal });
-      if (!res.ok) return null;
-      return await res.json();
+      const res = await fetch(url, { signal: ctl.signal, headers });
+      const j = await res.json().catch(() => null);
+      if (!res.ok) return j && j.message ? { error: j.message, code: j.code } : null;
+      return j;
     } catch { return null; }
     finally { clearTimeout(t); }
   }
@@ -339,8 +380,7 @@
   // ------------------------------------------------------------------ core
 
   /**
-   * Headless bridge engine. Works in the browser (with an EIP-1193 provider) and in Node
-   * (pass an ethers Signer via `signer`).
+   * Headless engine. Works in the browser (EIP-1193 provider) and in Node (ethers Signer).
    *
    * opts:
    *   ethers        ethers v6 namespace (required)
@@ -348,11 +388,15 @@
    *   provider      EIP-1193 provider (MetaMask, Web3Auth, ...). Optional if `signer` given.
    *   signer        ethers Signer already bound to the source chain (Node / custom flows)
    *   arcRpcs       override Arc read RPCs (e.g. from anewone config.js)
+   *   arcExplorer   override Arc explorer
    *   sources       override / filter the source chain list (array of chain configs or keys)
    *   switchChain   async (chainCfg) => void — custom chain switching (Web3Auth etc.)
    *   storage       { get(k), set(k,v) } — defaults to localStorage
-   *   feeHeadroom   BigInt multiplier applied to the quoted fee for maxFee (default 2n)
-   *   minAmount     BigInt minor units (default 1 USDC)
+   *   feeHeadroom   BigInt multiplier applied to the quoted CCTP fee for maxFee (default 2n)
+   *   minAmount     BigInt USDC minor units (default 1 USDC)
+   *   router        "auto" (LI.FI route into Arc when it exists, else CCTP) | "cctp" | "lifi"
+   *   lifiApiKey    optional LI.FI partner key (higher rate limits)
+   *   slippage      swap slippage as a fraction (default 0.005 = 0.5%)
    */
   class ArcBridge {
     constructor(opts = {}) {
@@ -369,7 +413,12 @@
       this.storage = makeStorage(opts.storage);
       this.feeHeadroom = opts.feeHeadroom ?? 2n;
       this.minAmount = opts.minAmount ?? 1_000_000n;
+      this.router = opts.router || "auto";
+      this.lifiApiKey = opts.lifiApiKey || null;
+      this.slippage = opts.slippage ?? 0.005;
       this.storageKey = "arcbridgekit:" + this.network + ":transfers";
+      this._tokenCache = {};
+      this._arcRouteCache = {};
 
       const all = SOURCES[this.network];
       if (Array.isArray(opts.sources) && opts.sources.length) {
@@ -388,8 +437,77 @@
     explorerTx(cfg, hash) { return cfg.explorer ? cfg.explorer.replace(/\/$/, "") + "/tx/" + hash : ""; }
     explorerAddress(cfg, addr) { return cfg.explorer ? cfg.explorer.replace(/\/$/, "") + "/address/" + addr : ""; }
 
-    // ---- reads (no wallet needed)
+    // ---- LI.FI
 
+    _lifiHeaders() { return this.lifiApiKey ? { "x-lifi-api-key": this.lifiApiKey } : {}; }
+
+    /** Tokens LI.FI can swap on a chain, cached per session. */
+    async lifiTokens(chainId) {
+      if (this._tokenCache[chainId]) return this._tokenCache[chainId];
+      const j = await fetchJson(`${LIFI.api}/tokens?chains=${chainId}`, 12000, this._lifiHeaders());
+      const list = (j && j.tokens && j.tokens[String(chainId)]) || [];
+      this._tokenCache[chainId] = list;
+      return list;
+    }
+
+    /** "Pay with" shortlist for a source chain. */
+    async payTokens(source) {
+      const src = typeof source === "object" ? source : this.source(source);
+      return payShortlist(await this.lifiTokens(src.chainId), src);
+    }
+
+    /**
+     * One LI.FI quote. fromChain === toChain is a swap; different chains a route. Returns
+     * { available, quote, toAmount, toAmountMin, approvalAddress, tx, tool, estSeconds, gasUsd, feeUsd }
+     * or { available: false, reason }.
+     */
+    async lifiQuote({ fromChain, toChain, fromToken, toToken, fromAmount, fromAddress, toAddress, order }) {
+      const from = isAddress(fromAddress) ? fromAddress.toLowerCase() : "0x000000000000000000000000000000000000dead";
+      const q = new URLSearchParams({
+        fromChain: String(fromChain), toChain: String(toChain), fromToken, toToken,
+        fromAddress: from, fromAmount: String(fromAmount), slippage: String(this.slippage),
+        integrator: LIFI.integrator,
+      });
+      if (toAddress && isAddress(toAddress)) q.set("toAddress", toAddress.toLowerCase());
+      if (order) q.set("order", order);
+      const j = await fetchJson(`${LIFI.api}/quote?${q}`, 15000, this._lifiHeaders());
+      if (!j) return { available: false, reason: "LI.FI did not answer" };
+      if (j.error || !j.estimate) return { available: false, reason: j.error || j.message || "no LI.FI route" };
+      const e = j.estimate;
+      return {
+        available: true, quote: j, tool: j.tool, type: j.type,
+        toAmount: BigInt(e.toAmount), toAmountMin: BigInt(e.toAmountMin || e.toAmount),
+        approvalAddress: e.approvalAddress || null, tx: toTxRequest(j.transactionRequest),
+        estSeconds: Number(e.executionDuration || 0),
+        gasUsd: (e.gasCosts || []).reduce((s, g) => s + Number(g.amountUSD || 0), 0),
+        feeUsd: (e.feeCosts || []).reduce((s, f) => s + Number(f.amountUSD || 0), 0),
+      };
+    }
+
+    /** Same-chain swap quote into USDC on `source`. */
+    async quoteSwap(source, fromToken, fromAmount, fromAddress) {
+      const src = typeof source === "object" ? source : this.source(source);
+      if (sameAddr(fromToken, src.usdc)) return { available: true, identity: true, toAmount: BigInt(fromAmount), toAmountMin: BigInt(fromAmount) };
+      return this.lifiQuote({ fromChain: src.chainId, toChain: src.chainId, fromToken, toToken: src.usdc, fromAmount, fromAddress });
+    }
+
+    /**
+     * Does LI.FI route this source chain into Arc yet? Probed with a real quote (cheap, cached
+     * 10 min). When it does, router "auto" takes the LI.FI route (any token in, USDC on Arc out).
+     */
+    async arcRouteAvailable(source, fromAddress) {
+      const src = typeof source === "object" ? source : this.source(source);
+      const c = this._arcRouteCache[src.chainId];
+      if (c && Date.now() - c.at < 600_000) return c.ok;
+      const r = await this.lifiQuote({ fromChain: src.chainId, toChain: this.arc.chainId, fromToken: src.usdc,
+        toToken: this.arc.usdc, fromAmount: 5_000_000n, fromAddress });
+      this._arcRouteCache[src.chainId] = { at: Date.now(), ok: !!r.available };
+      return !!r.available;
+    }
+
+    // ---- quotes (no wallet needed)
+
+    /** CCTP fee quote for `amount` USDC minor units from `source`. */
     async quote(source, amount, speed = "fast") {
       const src = typeof source === "object" ? source : this.source(source);
       if (!src) throw new Error("unknown source chain");
@@ -397,13 +515,59 @@
       const fees = await fetchJson(url);
       const q = computeFees(fees, amount, src.fast ? speed : "standard", this.feeHeadroom);
       if (!q) return { available: false, reason: "Circle is not quoting a forwarded route from " + src.name + " to Arc right now." };
-      return { available: true, source: src, amount: BigInt(amount), ...q,
+      return { available: true, router: "cctp", source: src, amount: BigInt(amount), ...q,
         estSeconds: q.minFinalityThreshold === FINALITY.fast ? 20 : (src.domain === 0 ? 900 : 120) };
     }
+
+    /**
+     * Full plan for "pay `fromAmount` of `payToken` on `source`, land USDC on Arc":
+     *  { router: "cctp"|"lifi", swap?, bridge, usdcIn, expectedReceive, estSeconds, ... }
+     */
+    async plan({ source, payToken, fromAmount, speed = "fast", fromAddress, recipient }) {
+      const src = typeof source === "object" ? source : this.source(source);
+      if (!src) throw new Error("unknown source chain");
+      const token = payToken || src.usdc;
+      const amt = BigInt(fromAmount);
+
+      // Route straight into Arc via LI.FI when it exists (or is forced)
+      if (this.router === "lifi" || (this.router === "auto" && await this.arcRouteAvailable(src, fromAddress))) {
+        const r = await this.lifiQuote({ fromChain: src.chainId, toChain: this.arc.chainId, fromToken: token,
+          toToken: this.arc.usdc, fromAmount: amt, fromAddress, toAddress: recipient });
+        if (r.available) {
+          return { available: true, router: "lifi", source: src, payToken: token, fromAmount: amt, lifi: r,
+            usdcIn: r.toAmount, expectedReceive: r.toAmount, minReceive: r.toAmountMin, estSeconds: r.estSeconds || 60,
+            protocolFee: 0n, forwardFee: 0n, expectedFee: 0n };
+        }
+        if (this.router === "lifi") return { available: false, reason: r.reason };
+      }
+
+      // Otherwise: optional LI.FI swap to USDC, then CCTP
+      let swap = null, usdcIn = amt;
+      if (!sameAddr(token, src.usdc)) {
+        swap = await this.quoteSwap(src, token, amt, fromAddress);
+        if (!swap.available) return { available: false, reason: "No LI.FI swap into USDC on " + src.name + ": " + swap.reason };
+        usdcIn = swap.toAmountMin; // plan on the guaranteed minimum; the real amount is measured after the swap
+      }
+      if (usdcIn < this.minAmount) return { available: false, reason: "That is less than " + formatUsdc(this.minAmount) + " USDC after the swap." };
+      const bridge = await this.quote(src, usdcIn, speed);
+      if (!bridge.available) return bridge;
+      if (bridge.maxFee >= usdcIn) return { available: false, reason: "amount too small to cover bridge fees (max " + formatUsdc(bridge.maxFee) + " USDC)" };
+      return { available: true, router: "cctp", source: src, payToken: token, fromAmount: amt, swap, bridge, usdcIn,
+        expectedReceive: bridge.expectedReceive, minReceive: bridge.minReceive,
+        protocolFee: bridge.protocolFee, forwardFee: bridge.forwardFee, expectedFee: bridge.expectedFee,
+        estSeconds: bridge.estSeconds + (swap ? 15 : 0) };
+    }
+
+    // ---- balances
 
     async usdcBalance(source, owner) {
       const src = typeof source === "object" ? source : this.source(source);
       return erc20Balance(src.rpcs, src.usdc, owner);
+    }
+    async tokenBalance(source, token, owner) {
+      const src = typeof source === "object" ? source : this.source(source);
+      if (isNative(token)) return this.nativeBalance(src, owner);
+      return erc20Balance(src.rpcs, token, owner);
     }
     async arcUsdcBalance(owner) {
       if (!this.arc.rpcs.length) return null;
@@ -472,6 +636,19 @@
       return bp.getSigner();
     }
 
+    async _ensureAllowance(signer, token, owner, spender, amount, onStep, label) {
+      const erc = new this.ethers.Contract(token, ABI.erc20, signer);
+      const allowance = await erc.allowance(owner, spender);
+      if (allowance >= amount) return null;
+      onStep({ step: "approving", amount, token, spender, label });
+      const tx = await erc.approve(spender, amount);
+      onStep({ step: "approve_sent", hash: tx.hash, label });
+      const rc = await tx.wait();
+      if (!rc || rc.status !== 1) throw new Error("approval reverted");
+      onStep({ step: "approved", hash: tx.hash, label });
+      return tx.hash;
+    }
+
     // ---- persistence
 
     transfers() { return this.storage.get(this.storageKey) || []; }
@@ -492,18 +669,19 @@
       if (tr) { tr.status = "dismissed"; this._save(tr); }
     }
 
-    // ---- the bridge itself
+    // ---- the flow
 
     /**
-     * Burn `amount` (BigInt minor units) of USDC on `source`, forwarded to `recipient` on Arc.
-     * onStep({ step, ...data }) fires: switching, quoting, approving, approved, burning, burned.
-     * Resolves with the persisted transfer record once the burn tx is mined; call track() next.
+     * Pay `fromAmount` of `payToken` (default USDC) on `source`; USDC lands at `recipient` on Arc.
+     * onStep({ step, ... }): switching, planning, approving/approve_sent/approved (label swap|bridge|lifi),
+     *   swapping, swap_sent, swapped, burning, burn_sent, burned, lifi_sending, lifi_sent.
+     * Resolves with the persisted transfer once the source-chain transaction is mined; then track().
      */
-    async bridge({ source, amount, recipient, speed = "fast", dest = false, onStep = () => {} }) {
+    async bridge({ source, amount, payToken, recipient, speed = "fast", dest = false, onStep = () => {} }) {
       const src = typeof source === "object" ? source : this.source(source);
       if (!src) throw new Error("unknown source chain");
+      const token = payToken || src.usdc;
       const amt = BigInt(amount);
-      if (amt < this.minAmount) throw new Error("minimum is " + formatUsdc(this.minAmount) + " USDC");
       const mintRecipient = toBytes32Address(recipient);
 
       onStep({ step: "switching", chain: src });
@@ -511,38 +689,74 @@
       const signer = await this._signer();
       const owner = await signer.getAddress();
 
-      onStep({ step: "quoting" });
-      const q = await this.quote(src, amt, speed);
-      if (!q.available) throw new Error(q.reason);
-      if (q.maxFee >= amt) throw new Error("amount too small to cover fees (max fee " + formatUsdc(q.maxFee) + " USDC)");
+      onStep({ step: "planning" });
+      const plan = await this.plan({ source: src, payToken: token, fromAmount: amt, speed, fromAddress: owner, recipient });
+      if (!plan.available) throw new Error(plan.reason);
 
-      const usdc = new this.ethers.Contract(src.usdc, ABI.usdc, signer);
-      const bal = await usdc.balanceOf(owner);
-      if (bal < amt) throw new Error("USDC balance on " + src.name + " is " + formatUsdc(bal) + ", need " + formatUsdc(amt));
+      const bal = await this.tokenBalance(src, token, owner);
+      if (bal != null && bal < amt) throw new Error("balance on " + src.name + " is too low for " + amt.toString() + " minor units of the pay token");
 
-      const allowance = await usdc.allowance(owner, this.cctp.tokenMessenger);
-      if (allowance < amt) {
-        onStep({ step: "approving", amount: amt });
-        const tx = await usdc.approve(this.cctp.tokenMessenger, amt);
-        onStep({ step: "approve_sent", hash: tx.hash, url: this.explorerTx(src, tx.hash) });
+      const tr = this._save({
+        id: "t" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), network: this.network,
+        router: plan.router, sourceKey: src.key, sourceChainId: src.chainId, sourceDomain: src.domain,
+        payToken: token, payAmount: amt.toString(), recipient: this.ethers.getAddress(recipient), sender: owner,
+        speed, dest: dest ? { status: "pending" } : undefined, status: "planned", startedAt: Date.now(),
+      });
+
+      // ---- router "lifi": one route from any token straight into Arc
+      if (plan.router === "lifi") {
+        if (!isNative(token)) await this._ensureAllowance(signer, token, owner, plan.lifi.approvalAddress, amt, onStep, "lifi");
+        onStep({ step: "lifi_sending", tool: plan.lifi.tool });
+        const tx = await signer.sendTransaction(plan.lifi.tx);
+        tr.status = "sending"; tr.sendTx = tx.hash; tr.burnTx = tx.hash; tr.amount = plan.usdcIn.toString();
+        tr.expectedFee = "0"; tr.tool = plan.lifi.tool; this._save(tr);
+        onStep({ step: "lifi_sent", hash: tx.hash, url: this.explorerTx(src, tx.hash), transfer: tr });
         const rc = await tx.wait();
-        if (!rc || rc.status !== 1) throw new Error("approval reverted");
-        onStep({ step: "approved", hash: tx.hash });
+        if (!rc || rc.status !== 1) { tr.status = "failed"; tr.error = "route tx reverted"; this._save(tr); throw new Error("LI.FI transaction reverted"); }
+        tr.status = "sent"; tr.sentAt = Date.now(); this._save(tr);
+        onStep({ step: "burned", hash: tx.hash, transfer: tr });
+        return tr;
       }
 
+      // ---- leg 1: swap into USDC on the source chain (LI.FI)
+      let usdcAmount = amt;
+      if (plan.swap && !plan.swap.identity) {
+        const usdc = new this.ethers.Contract(src.usdc, ABI.erc20, signer);
+        const before = await usdc.balanceOf(owner);
+        if (!isNative(token)) await this._ensureAllowance(signer, token, owner, plan.swap.approvalAddress, amt, onStep, "swap");
+        onStep({ step: "swapping", tool: plan.swap.tool, expected: plan.swap.toAmount });
+        const tx = await signer.sendTransaction(plan.swap.tx);
+        tr.status = "swapping"; tr.swapTx = tx.hash; this._save(tr);
+        onStep({ step: "swap_sent", hash: tx.hash, url: this.explorerTx(src, tx.hash), transfer: tr });
+        const rc = await tx.wait();
+        if (!rc || rc.status !== 1) { tr.status = "failed"; tr.error = "swap reverted"; this._save(tr); throw new Error("swap reverted"); }
+        const after = await usdc.balanceOf(owner);
+        usdcAmount = after - before;
+        if (usdcAmount <= 0n) usdcAmount = plan.swap.toAmountMin; // could not read the delta; bridge the guaranteed minimum
+        tr.status = "swapped"; tr.amount = usdcAmount.toString(); this._save(tr);
+        onStep({ step: "swapped", hash: tx.hash, usdc: usdcAmount, transfer: tr });
+      }
+
+      // ---- leg 2: CCTP burn with forwarding
+      return this._cctpLeg(tr, src, signer, owner, usdcAmount, mintRecipient, speed, onStep);
+    }
+
+    async _cctpLeg(tr, src, signer, owner, usdcAmount, mintRecipient, speed, onStep) {
+      const q = await this.quote(src, usdcAmount, speed);
+      if (!q.available) throw new Error(q.reason);
+      if (q.maxFee >= usdcAmount) throw new Error("amount too small to cover fees (max fee " + formatUsdc(q.maxFee) + " USDC)");
+      const usdc = new this.ethers.Contract(src.usdc, ABI.erc20, signer);
+      const bal = await usdc.balanceOf(owner);
+      if (bal < usdcAmount) throw new Error("USDC balance on " + src.name + " is " + formatUsdc(bal) + ", need " + formatUsdc(usdcAmount));
+      await this._ensureAllowance(signer, src.usdc, owner, this.cctp.tokenMessenger, usdcAmount, onStep, "bridge");
+
       const tm = new this.ethers.Contract(this.cctp.tokenMessenger, ABI.tokenMessenger, signer);
-      onStep({ step: "burning", amount: amt, maxFee: q.maxFee });
+      onStep({ step: "burning", amount: usdcAmount, maxFee: q.maxFee });
       const tx = await tm.depositForBurnWithHook(
-        amt, ARC_DOMAIN, mintRecipient, src.usdc, ZERO32, q.maxFee, q.minFinalityThreshold, FORWARD_HOOK
+        usdcAmount, ARC_DOMAIN, mintRecipient, src.usdc, ZERO32, q.maxFee, q.minFinalityThreshold, FORWARD_HOOK
       );
-      const tr = this._save({
-        id: tx.hash, burnTx: tx.hash, network: this.network,
-        sourceKey: src.key, sourceChainId: src.chainId, sourceDomain: src.domain,
-        amount: amt.toString(), expectedFee: q.expectedFee.toString(), maxFee: q.maxFee.toString(),
-        speed: q.speed, recipient: this.ethers.getAddress(recipient), sender: owner,
-        dest: dest ? { status: "pending" } : undefined,
-        status: "burning", startedAt: Date.now(),
-      });
+      tr.burnTx = tx.hash; tr.amount = usdcAmount.toString(); tr.expectedFee = q.expectedFee.toString();
+      tr.maxFee = q.maxFee.toString(); tr.status = "burning"; this._save(tr);
       onStep({ step: "burn_sent", hash: tx.hash, url: this.explorerTx(src, tx.hash), transfer: tr });
       const rc = await tx.wait();
       if (!rc || rc.status !== 1) { tr.status = "failed"; tr.error = "burn reverted"; this._save(tr); throw new Error("burn reverted"); }
@@ -551,17 +765,32 @@
       return tr;
     }
 
+    /** Resume a transfer that swapped into USDC but never burned (page closed in between). */
+    async continueBridge(tr, onStep = () => {}) {
+      if (tr.status !== "swapped") throw new Error("nothing to continue");
+      const src = this.source(tr.sourceKey);
+      onStep({ step: "switching", chain: src });
+      await this.ensureChain(src);
+      const signer = await this._signer();
+      const owner = await signer.getAddress();
+      return this._cctpLeg(tr, src, signer, owner, BigInt(tr.amount), toBytes32Address(tr.recipient), tr.speed || "fast", onStep);
+    }
+
     /** Iris message lookup for a burn tx. */
     async message(tr) {
       const j = await fetchJson(`${this.cctp.iris}/v2/messages/${tr.sourceDomain}?transactionHash=${tr.burnTx}`);
       return (j && j.messages && j.messages[0]) || null;
     }
 
+    /** LI.FI status for a route transaction. */
+    async lifiStatus(tr) {
+      const q = new URLSearchParams({ txHash: tr.sendTx || tr.burnTx, fromChain: String(tr.sourceChainId), toChain: String(this.arc.chainId) });
+      return fetchJson(`${LIFI.api}/status?${q}`, 12000, this._lifiHeaders());
+    }
+
     /**
-     * Follow a burned transfer to the mint on Arc.
-     * onStep fires: attesting, attested, forwarding, minted, stalled.
-     * Resolves with the transfer once minted (or once `stalled` if the forwarder is late and
-     * `opts.stallAfterMs` elapsed since attestation; the caller may then offer manualMint).
+     * Follow a source-chain transaction to the USDC landing on Arc.
+     * onStep: attesting, attested, forwarding, minted, stalled (CCTP) / routing, minted, failed (LI.FI).
      */
     async track(tr, onStep = () => {}, opts = {}) {
       const stallAfter = opts.stallAfterMs ?? 10 * 60_000;
@@ -569,6 +798,26 @@
       const startBal = tr.arcStartBalance != null ? BigInt(tr.arcStartBalance)
         : (await this.arcUsdcBalance(tr.recipient));
       if (tr.arcStartBalance == null && startBal != null) { tr.arcStartBalance = startBal.toString(); this._save(tr); }
+
+      if (tr.router === "lifi") {
+        if (["sending", "sent"].includes(tr.status)) { tr.status = "routing"; this._save(tr); }
+        onStep({ step: "routing", transfer: tr });
+        for (;;) {
+          if (opts.signal && opts.signal.aborted) return tr;
+          const s = await this.lifiStatus(tr);
+          const bal = await this.arcUsdcBalance(tr.recipient);
+          const landed = (bal != null && startBal != null && bal > startBal) || (s && s.status === "DONE");
+          if (s && s.receiving && s.receiving.txHash && !tr.mintTx) { tr.mintTx = s.receiving.txHash; this._save(tr); }
+          if (landed) {
+            tr.status = "minted"; tr.mintedAt = Date.now();
+            if (bal != null && startBal != null) tr.received = (bal - startBal).toString();
+            else if (s && s.receiving && s.receiving.amount) tr.received = String(s.receiving.amount);
+            this._save(tr); onStep({ step: "minted", transfer: tr }); return tr;
+          }
+          if (s && s.status === "FAILED") { tr.status = "failed"; tr.error = s.substatus || "route failed"; this._save(tr); onStep({ step: "failed", transfer: tr }); return tr; }
+          await sleep(pollMs);
+        }
+      }
 
       if (tr.status === "burning" || tr.status === "burned") { tr.status = "attesting"; this._save(tr); }
       onStep({ step: tr.status, transfer: tr });
@@ -612,8 +861,8 @@
     }
 
     /**
-     * Last resort: mint the attested message on Arc from the user's wallet (needs a little
-     * USDC for gas on Arc). Only possible once `tr.attestation` is set.
+     * Last resort for CCTP: mint the attested message on Arc from the user's wallet (needs a
+     * little USDC for gas on Arc). Only possible once `tr.attestation` is set.
      */
     async manualMint(tr, onStep = () => {}) {
       if (!tr.message || !tr.attestation) throw new Error("transfer is not attested yet");
@@ -633,13 +882,13 @@
 
     /** USDC minor units (6 dec) that landed on Arc for this transfer. */
     receivedOf(tr) {
-      return BigInt(tr.received || (BigInt(tr.amount) - BigInt(tr.expectedFee || 0)));
+      return BigInt(tr.received || (BigInt(tr.amount || 0) - BigInt(tr.expectedFee || 0)));
     }
 
     /**
-     * Optional second leg on Arc once the USDC has landed, e.g. a launchpad buy. The host
-     * builds the transaction; the kit switches the wallet to Arc, sends it and records the
-     * outcome on the transfer so a refresh can resume or retry it.
+     * Optional last leg on Arc once the USDC has landed, e.g. a launchpad buy. The host builds
+     * the transaction; the kit switches the wallet to Arc, sends it and records the outcome so
+     * a refresh can resume or retry it.
      *
      * destination.build({ transfer, received, signer, ethers, arc }) -> ethers TransactionRequest
      *   `received` is BigInt USDC minor units (6 dec). USDC is Arc's native token with 18
@@ -693,8 +942,10 @@
 .abk-field:focus{border-color:var(--abk-border2)}
 .abk-amount{display:flex;align-items:center;background:var(--abk-bg2);border:1px solid var(--abk-border);border-radius:var(--abk-rs)}
 .abk-amount input{flex:1;background:none;border:0;padding:10px 12px;font:600 18px var(--abk-mono);color:var(--abk-text);outline:none;min-width:0}
-.abk-amount .abk-unit{padding:0 12px;color:var(--abk-dim);font-size:12px}
-.abk-amount button{margin-right:6px}
+.abk-amount .abk-tok{position:relative;border-left:1px solid var(--abk-border)}
+.abk-amount .abk-tok select{background:none;border:0;padding:10px 26px 10px 10px;font:600 13px inherit;font-family:inherit;color:var(--abk-text);outline:none;appearance:none;-webkit-appearance:none;cursor:pointer;max-width:120px}
+.abk-amount .abk-tok:after{content:"";position:absolute;right:11px;top:50%;width:6px;height:6px;border-right:1.5px solid var(--abk-dim);border-bottom:1.5px solid var(--abk-dim);transform:translateY(-70%) rotate(45deg);pointer-events:none}
+.abk-amount button{margin:0 6px}
 .abk-sel{position:relative}
 .abk-sel:after{content:"";position:absolute;right:12px;top:50%;width:7px;height:7px;border-right:1.5px solid var(--abk-dim);border-bottom:1.5px solid var(--abk-dim);transform:translateY(-70%) rotate(45deg);pointer-events:none}
 .abk-seg{display:flex;background:var(--abk-bg2);border:1px solid var(--abk-border);border-radius:var(--abk-rs);padding:3px;gap:3px}
@@ -704,6 +955,7 @@
 .abk-fees{margin-top:12px;font-size:12.5px;color:var(--abk-dim);display:grid;grid-template-columns:1fr auto;row-gap:4px}
 .abk-fees .v{font-family:var(--abk-mono);color:var(--abk-text);text-align:right}
 .abk-fees .tot{font-weight:600;color:var(--abk-text)}
+.abk-fees .via{grid-column:1/-1;font-size:11.5px;color:var(--abk-faint)}
 .abk-btn{width:100%;margin-top:14px;padding:12px;border:0;border-radius:var(--abk-rs);background:var(--abk-accent);color:#fff;font:600 14px inherit;font-family:inherit;cursor:pointer}
 .abk-btn:disabled{opacity:.55;cursor:not-allowed}
 .abk-btn.ghost{background:var(--abk-bg2);color:var(--abk-text);border:1px solid var(--abk-border)}
@@ -735,15 +987,18 @@
 .abk-ok a{color:var(--abk-accent);font-family:var(--abk-mono);font-size:12px;text-decoration:none}
 `;
 
-  const BASE_STEPS = [
-    { key: "approve", label: "Approve USDC" },
-    { key: "burn", label: "Burn on source chain" },
-    { key: "attest", label: "Circle attestation" },
-    { key: "mint", label: "Mint on Arc" },
-  ];
-  const stepsFor = (destination) => destination
-    ? BASE_STEPS.concat([{ key: "dest", label: destination.label || "Swap on Arc" }])
-    : BASE_STEPS;
+  function stepsFor(plan, destination) {
+    const s = [];
+    if (plan && plan.router === "lifi") s.push({ key: "burn", label: "Send via LI.FI" }, { key: "attest", label: "Route to Arc" });
+    else {
+      if (plan && plan.swap && !plan.swap.identity) s.push({ key: "swap", label: "Swap to USDC on " + plan.source.name });
+      s.push({ key: "approve", label: "Approve USDC" }, { key: "burn", label: "Burn on source chain" },
+        { key: "attest", label: "Circle attestation" });
+    }
+    s.push({ key: "mint", label: "USDC on Arc" });
+    if (destination) s.push({ key: "dest", label: destination.label || "Swap on Arc" });
+    return s;
+  }
 
   function el(tag, attrs = {}, children = []) {
     const n = document.createElement(tag);
@@ -772,11 +1027,12 @@
    *   recipient     string | () => string — default mint recipient (defaults to connected account)
    *   defaultSource key of the pre-selected chain (default: first in list)
    *   defaultAmount string, e.g. "10"
+   *   payWith       "usdc" (USDC only, no swap leg) | "any" (default: LI.FI shortlist)
    *   onEvent       (evt) => void — mirrors every step for analytics / host UI
    *   onMinted      (transfer) => void
-   *   destination   { label, build, auto=true, buttonLabel, doneLabel } — optional second leg on
-   *                 Arc after the mint (see ArcBridge.runDestination). With auto=true the wallet
-   *                 is prompted as soon as the USDC lands; otherwise a button appears.
+   *   destination   { label, build, auto=true, buttonLabel, doneLabel } — optional last leg on
+   *                 Arc after the USDC lands (see ArcBridge.runDestination). With auto=true the
+   *                 wallet is prompted as soon as the USDC lands; otherwise a button appears.
    *   onDestination (transfer) => void — fired when the destination leg is mined
    *   title         override header text
    */
@@ -784,9 +1040,9 @@
     if (!container) throw new Error("ArcBridgeKit.mount: container missing");
     injectCss();
     const state = {
-      core: null, account: null, source: null, speed: "fast", quote: null, quoting: null,
+      core: null, account: null, source: null, speed: "fast", plan: null, planning: null,
       busy: false, error: "", steps: {}, links: {}, done: null, balance: null, pendingTracked: new Set(),
-      customRecipient: false,
+      customRecipient: false, tokens: [], payToken: null, activePlan: null,
     };
     const emit = (e) => { try { opts.onEvent && opts.onEvent(e); } catch {} };
 
@@ -798,15 +1054,18 @@
     };
     const c0 = core();
     state.source = c0.source(opts.defaultSource) || c0.sources()[0];
+    const payAny = opts.payWith !== "usdc";
 
     // ---- DOM
     const badge = el("span", { class: "abk-badge" + (c0.network === "testnet" ? " test" : "") }, c0.network === "testnet" ? "TESTNET" : "MAINNET");
-    const title = el("div", { class: "abk-title" }, opts.title || "Bridge USDC to " + c0.arc.name);
-    const balLbl = el("b", { title: "Use full balance", onclick: () => { if (state.balance != null) { amountIn.value = formatUsdc(state.balance); onAmount(); } } }, "");
-    const chainSel = el("select", { class: "abk-field", onchange: () => { state.source = c0.source(chainSel.value); state.balance = null; refreshBalance(); requote(); } },
+    const title = el("div", { class: "abk-title" }, opts.title || "Bridge to " + c0.arc.name);
+    const balLbl = el("b", { title: "Use full balance", onclick: () => { if (state.balance != null && state.payToken) { amountIn.value = formatUnits(state.balance, state.payToken.decimals, 6); onAmount(); } } }, "");
+    const chainSel = el("select", { class: "abk-field", onchange: () => { state.source = c0.source(chainSel.value); state.balance = null; loadTokens().then(() => { refreshBalance(); replan(); }); } },
       c0.sources().map((s) => el("option", { value: s.key }, s.name)));
     chainSel.value = state.source.key;
     const amountIn = el("input", { inputmode: "decimal", placeholder: "0.00", value: opts.defaultAmount || "", oninput: () => onAmount() });
+    const tokSel = el("select", { onchange: () => { state.payToken = state.tokens.find((t) => t.address === tokSel.value) || state.tokens[0]; state.balance = null; refreshBalance(); replan(); } });
+    const tokWrap = el("div", { class: "abk-tok" }, tokSel);
     const maxBtn = el("button", { class: "abk-mini", onclick: () => balLbl.onclick() }, "MAX");
     const fastBtn = el("button", { class: "on", onclick: () => setSpeed("fast") }, ["Fast", el("small", {}, "~20 s")]);
     const stdBtn = el("button", { onclick: () => setSpeed("standard") }, ["Standard", el("small", {}, "no protocol fee")]);
@@ -820,20 +1079,31 @@
     const okBox = el("div", { class: "abk-ok", style: "display:none" });
     const stepsBox = el("div", { class: "abk-steps", style: "display:none" });
     const pendBox = el("div", { class: "abk-pend", style: "display:none" });
-    const note = el("div", { class: "abk-note" }, "One signature on the source chain. Circle mints native USDC on Arc for you — no gas needed on Arc.");
+    const note = el("div", { class: "abk-note" }, "Pay with what you have; USDC lands on Arc with no gas needed there. Swaps by LI.FI, bridging by Circle CCTP.");
 
     container.classList.add("abk");
     container.replaceChildren(
       el("div", { class: "abk-head" }, [title, badge]),
       el("div", {}, [el("div", { class: "abk-label" }, ["From", balLbl]), el("div", { class: "abk-sel" }, chainSel)]),
-      el("div", { style: "margin-top:10px" }, [el("div", { class: "abk-label" }, ["Amount", recipToggle]),
-        el("div", { class: "abk-amount" }, [amountIn, el("span", { class: "abk-unit" }, "USDC"), maxBtn])]),
+      el("div", { style: "margin-top:10px" }, [el("div", { class: "abk-label" }, ["Pay", recipToggle]),
+        el("div", { class: "abk-amount" }, [amountIn, tokWrap, maxBtn])]),
       recipWrap,
-      el("div", { style: "margin-top:10px" }, [el("div", { class: "abk-label" }, "Speed"), seg]),
+      el("div", { style: "margin-top:10px" }, [el("div", { class: "abk-label" }, "Bridge speed"), seg]),
       feesBox, btn, note, errBox, okBox, stepsBox, pendBox
     );
 
     // ---- logic
+    async function loadTokens() {
+      const src = state.source;
+      const usdcOnly = [{ address: src.usdc, symbol: "USDC", name: "USD Coin", decimals: USDC_DECIMALS }];
+      state.tokens = payAny ? await c0.payTokens(src).catch(() => usdcOnly) : usdcOnly;
+      if (state.source !== src) return; // user moved on while we were loading
+      const keep = state.payToken && state.tokens.find((t) => t.symbol === state.payToken.symbol);
+      state.payToken = keep || state.tokens.find((t) => t.symbol === "USDC") || state.tokens[0];
+      tokSel.replaceChildren(...state.tokens.map((t) => el("option", { value: t.address }, t.symbol)));
+      tokSel.value = state.payToken.address;
+      render();
+    }
     function recipient() {
       if (state.customRecipient) return recipIn.value.trim();
       const r = typeof opts.recipient === "function" ? opts.recipient() : opts.recipient;
@@ -842,34 +1112,36 @@
     function setSpeed(s) {
       state.speed = s;
       fastBtn.classList.toggle("on", s === "fast"); stdBtn.classList.toggle("on", s !== "fast");
-      requote();
+      replan();
     }
-    function amountMinor() { try { return parseUsdc(amountIn.value); } catch { return null; } }
+    function amountMinor() { try { return state.payToken ? parseUnits(amountIn.value, state.payToken.decimals) : null; } catch { return null; } }
     let amountTimer = null;
-    function onAmount() { clearTimeout(amountTimer); amountTimer = setTimeout(requote, 250); render(); }
+    function onAmount() { clearTimeout(amountTimer); amountTimer = setTimeout(replan, 300); render(); }
 
-    async function requote() {
+    async function replan() {
       const amt = amountMinor();
-      state.quote = null;
-      if (!state.source.fast && state.speed === "fast") { /* fast not offered here; quote() falls back to standard */ }
-      if (!amt || amt === 0n) { render(); return; }
-      const my = state.quoting = Symbol();
-      const q = await c0.quote(state.source, amt, state.speed);
-      if (state.quoting !== my) return;
-      state.quote = q; render();
+      state.plan = null;
+      if (!amt || amt === 0n || !state.payToken) { render(); return; }
+      const my = state.planning = Symbol();
+      render();
+      const p = await c0.plan({ source: state.source, payToken: state.payToken.address, fromAmount: amt, speed: state.speed,
+        fromAddress: state.account, recipient: recipient() }).catch((e) => ({ available: false, reason: msgOf(e) }));
+      if (state.planning !== my) return;
+      state.plan = p; render();
     }
 
     async function refreshBalance() {
-      if (!state.account) { render(); return; }
-      const b = await c0.usdcBalance(state.source, state.account);
-      state.balance = b; render();
+      if (!state.account || !state.payToken) { render(); return; }
+      const tok = state.payToken;
+      const b = await c0.tokenBalance(state.source, tok.address, state.account);
+      if (state.payToken === tok) { state.balance = b; render(); }
     }
 
     async function connect() {
       if (opts.onConnect) { state.account = await opts.onConnect(); state.core = null; core(); }
       else state.account = await c0.requestAccount();
       emit({ type: "connected", account: state.account });
-      refreshBalance(); resumePending(); render();
+      refreshBalance(); resumePending(); replan(); render();
     }
 
     function setStep(key, status, link) {
@@ -885,18 +1157,21 @@
       const to = recipient();
       if (!amt) { state.error = "Enter an amount."; render(); return; }
       if (!isAddress(to)) { state.error = "Recipient must be a valid 0x address."; render(); return; }
-      state.busy = true; state.steps = {}; state.links = {}; render();
+      state.busy = true; state.steps = {}; state.links = {}; state.activePlan = state.plan; render();
       const cr = core();
       try {
         const tr = await cr.bridge({
-          source: state.source, amount: amt, recipient: to, speed: state.speed, dest: !!opts.destination,
+          source: state.source, amount: amt, payToken: state.payToken.address, recipient: to, speed: state.speed, dest: !!opts.destination,
           onStep: (s) => {
             emit({ type: s.step, ...s });
-            if (s.step === "approving") setStep("approve", "on");
-            if (s.step === "approve_sent") setStep("approve", "on", s.url);
-            if (s.step === "approved") setStep("approve", "done");
+            if (s.step === "approving" || s.step === "approve_sent") setStep(s.label === "swap" ? "swap" : (s.label === "lifi" ? "burn" : "approve"), "on", s.url);
+            if (s.step === "approved") { if (s.label === "bridge") setStep("approve", "done"); }
+            if (s.step === "swapping") setStep("swap", "on");
+            if (s.step === "swap_sent") setStep("swap", "on", s.url);
+            if (s.step === "swapped") setStep("swap", "done");
             if (s.step === "burning") { if (!state.steps.approve) setStep("approve", "done"); setStep("burn", "on"); }
-            if (s.step === "burn_sent") setStep("burn", "on", s.url);
+            if (s.step === "burn_sent" || s.step === "lifi_sent") setStep("burn", "on", s.url);
+            if (s.step === "lifi_sending") setStep("burn", "on");
             if (s.step === "burned") setStep("burn", "done");
           },
         });
@@ -913,6 +1188,8 @@
       state.pendingTracked.add(tr.id);
       const cr = core();
       const src = cr.source(tr.sourceKey) || { explorer: "" };
+      if (!state.activePlan || state.activePlan.router !== tr.router) state.activePlan = { router: tr.router, source: src, swap: tr.swapTx ? {} : null };
+      if (tr.swapTx) { state.steps.swap = "done"; state.links.swap = cr.explorerTx(src, tr.swapTx); }
       state.links.burn = cr.explorerTx(src, tr.burnTx);
       state.steps.approve = "done"; state.steps.burn = "done";
       setStep("attest", "on");
@@ -920,6 +1197,7 @@
         emit({ type: s.step, transfer: s.transfer });
         if (s.step === "attested") { setStep("attest", "done"); setStep("mint", "on"); }
         if (s.step === "minted") {
+          setStep("attest", "done");
           setStep("mint", "done", s.transfer.mintTx ? cr.explorerTx(cr.arc, s.transfer.mintTx) : cr.explorerAddress(cr.arc, s.transfer.recipient));
           state.done = s.transfer; opts.onMinted && opts.onMinted(s.transfer);
           if (opts.destination && s.transfer.dest && s.transfer.dest.status !== "done") {
@@ -927,6 +1205,7 @@
             else setStep("dest", "wait");
           }
         }
+        if (s.step === "failed") { state.error = "The route failed (" + (s.transfer.error || "unknown") + "). LI.FI refunds to the sender on failure."; setStep("attest", "err"); }
         if (s.step === "stalled") { state.error = "Circle attested the transfer but the mint on Arc is late. Your USDC is safe; you can mint it yourself below."; }
         renderPending();
       });
@@ -936,10 +1215,28 @@
 
     function resumePending() {
       for (const tr of c0.pending()) {
-        if (tr.status === "burning") continue; // hash known but never confirmed: leave for the user to inspect
+        if (["planned", "burning", "swapping", "sending", "swapped"].includes(tr.status)) continue; // needs the user (listed with a button or left for inspection)
         follow(tr);
       }
       renderPending();
+    }
+
+    async function continueSwapped(tr) {
+      state.error = ""; state.busy = true; state.steps = { swap: "done" }; state.links = {}; state.activePlan = { router: "cctp", source: c0.source(tr.sourceKey), swap: {} }; render();
+      try {
+        const out = await core().continueBridge(tr, (s) => {
+          emit({ type: s.step, ...s });
+          if (s.step === "approving" || s.step === "approve_sent") setStep("approve", "on", s.url);
+          if (s.step === "approved") setStep("approve", "done");
+          if (s.step === "burning") { if (!state.steps.approve) setStep("approve", "done"); setStep("burn", "on"); }
+          if (s.step === "burn_sent") setStep("burn", "on", s.url);
+          if (s.step === "burned") setStep("burn", "done");
+        });
+        await follow(out);
+      } catch (e) {
+        state.error = msgOf(e);
+        for (const k of Object.keys(state.steps)) if (state.steps[k] === "on") state.steps[k] = "err";
+      } finally { state.busy = false; render(); renderPending(); }
     }
 
     async function runDest(tr) {
@@ -966,21 +1263,24 @@
     }
 
     function renderPending() {
-      const list = c0.pending().filter((t) => t.id !== (state.done && state.done.id));
+      const list = c0.pending().filter((t) => t.id !== (state.done && state.done.id) && t.status !== "planned");
       pendBox.style.display = list.length ? "" : "none";
       pendBox.replaceChildren(el("h4", {}, "In flight"), ...list.map((t) => {
         const src = c0.source(t.sourceKey) || { name: t.sourceKey, explorer: "" };
-        const row = el("div", { class: "it" }, [
-          el("div", {}, [formatUsdc(t.amount) + " USDC from " + src.name + " · ", el("span", {}, t.status === "minted" && t.dest ? "on Arc, " + t.dest.status : t.status)]),
+        const amountTxt = t.amount ? formatUsdc(t.amount) + " USDC" : "transfer";
+        const hash = t.burnTx || t.swapTx;
+        const statusTxt = t.status === "minted" && t.dest ? "on Arc, " + t.dest.status : t.status;
+        return el("div", { class: "it" }, [
+          el("div", {}, [amountTxt + " from " + src.name + " · ", el("span", {}, statusTxt)]),
           el("div", { style: "display:flex;gap:6px" }, [
-            el("a", { href: c0.explorerTx(src, t.burnTx), target: "_blank", rel: "noopener", class: "abk-mini" }, "tx"),
+            hash ? el("a", { href: c0.explorerTx(src, hash), target: "_blank", rel: "noopener", class: "abk-mini" }, "tx") : null,
+            t.status === "swapped" ? el("button", { class: "abk-mini", onclick: () => continueSwapped(t) }, "Bridge now") : null,
             t.status === "stalled" ? el("button", { class: "abk-mini", onclick: () => manual(t) }, "Mint on Arc") : null,
             t.status === "minted" && opts.destination && t.dest && t.dest.status !== "done"
               ? el("button", { class: "abk-mini", onclick: () => runDest(t) }, opts.destination.buttonLabel || "Run on Arc") : null,
             el("button", { class: "abk-mini", title: "Hide", onclick: () => { c0.dismiss(t.id); renderPending(); } }, "×"),
           ]),
         ]);
-        return row;
       }));
     }
 
@@ -992,34 +1292,46 @@
 
     function render() {
       const amt = amountMinor();
-      balLbl.textContent = state.account ? (state.balance == null ? "balance …" : "balance " + formatUsdc(state.balance)) : "";
+      const tok = state.payToken;
+      balLbl.textContent = state.account && tok ? (state.balance == null ? "balance …" : "balance " + formatUnits(state.balance, tok.decimals, 6) + " " + tok.symbol) : "";
       fastBtn.disabled = !state.source.fast;
       fastBtn.title = state.source.fast ? "" : state.source.name + " finalizes quickly; standard is already fast here";
       if (!state.source.fast && state.speed === "fast") { state.speed = "standard"; fastBtn.classList.remove("on"); stdBtn.classList.add("on"); }
-      // fees
-      const q = state.quote;
-      if (q && q.available) {
-        feesBox.replaceChildren(
-          el("div", {}, "Protocol fee" + (q.feeBps ? " (" + q.feeBps + " bps)" : "")), el("div", { class: "v" }, formatUsdc(q.protocolFee, 4)),
-          el("div", {}, "Forwarding fee"), el("div", { class: "v" }, formatUsdc(q.forwardFee, 4)),
-          el("div", { class: "tot" }, "You receive on Arc ≈"), el("div", { class: "v tot" }, formatUsdc(q.expectedReceive) + " USDC"),
-          el("div", {}, "Estimated time"), el("div", { class: "v" }, q.estSeconds < 60 ? "~" + q.estSeconds + " s" : "~" + Math.round(q.estSeconds / 60) + " min"),
-        );
+      // plan / fees
+      const p = state.plan;
+      if (p && p.available) {
+        const rows = [];
+        if (p.router === "lifi") {
+          rows.push(el("div", { class: "via" }, "One LI.FI route straight into Arc (" + p.lifi.tool + ")"));
+          rows.push(el("div", {}, "Fees + gas"), el("div", { class: "v" }, "$" + (p.lifi.feeUsd + p.lifi.gasUsd).toFixed(3)));
+        } else {
+          if (p.swap && !p.swap.identity) {
+            rows.push(el("div", {}, "Swap " + tok.symbol + " → USDC (LI.FI · " + p.swap.tool + ")"), el("div", { class: "v" }, "≈ " + formatUsdc(p.swap.toAmount) + " USDC"));
+            rows.push(el("div", {}, "Swap min after " + (c0.slippage * 100) + "% slippage"), el("div", { class: "v" }, formatUsdc(p.swap.toAmountMin)));
+          }
+          rows.push(el("div", {}, "Circle protocol fee" + (p.bridge.feeBps ? " (" + p.bridge.feeBps + " bps)" : "")), el("div", { class: "v" }, formatUsdc(p.protocolFee, 4)));
+          rows.push(el("div", {}, "Forwarding fee"), el("div", { class: "v" }, formatUsdc(p.forwardFee, 4)));
+        }
+        rows.push(el("div", { class: "tot" }, "You receive on Arc ≈"), el("div", { class: "v tot" }, formatUsdc(p.expectedReceive) + " USDC"));
+        rows.push(el("div", {}, "Estimated time"), el("div", { class: "v" }, p.estSeconds < 60 ? "~" + p.estSeconds + " s" : "~" + Math.round(p.estSeconds / 60) + " min"));
+        feesBox.replaceChildren(...rows);
         feesBox.style.display = "";
-      } else if (q && !q.available) {
-        feesBox.replaceChildren(el("div", { style: "grid-column:1/-1;color:var(--abk-red)" }, q.reason));
+      } else if (p && !p.available) {
+        feesBox.replaceChildren(el("div", { style: "grid-column:1/-1;color:var(--abk-red)" }, p.reason));
         feesBox.style.display = "";
+      } else if (state.planning && amt) {
+        feesBox.replaceChildren(el("div", { class: "via" }, "Getting quotes…")); feesBox.style.display = "";
       } else feesBox.style.display = "none";
       // button
       let label = "Connect wallet", disabled = false;
       if (state.account) {
         if (state.busy) { label = "Working…"; disabled = true; }
         else if (!amt || amt === 0n) { label = "Enter amount"; disabled = true; }
-        else if (state.balance != null && state.balance < amt) { label = "Insufficient USDC on " + state.source.name; disabled = true; }
-        else if (q && !q.available) { label = "Route unavailable"; disabled = true; }
-        else if (q && q.maxFee >= amt) { label = "Amount too small"; disabled = true; }
+        else if (state.balance != null && state.balance < amt) { label = "Insufficient " + (tok ? tok.symbol : "balance") + " on " + state.source.name; disabled = true; }
+        else if (!p) { label = "Getting quotes…"; disabled = true; }
+        else if (!p.available) { label = "Route unavailable"; disabled = true; }
         else if (state.customRecipient && !isAddress(recipIn.value.trim())) { label = "Enter recipient"; disabled = true; }
-        else label = "Bridge " + formatUsdc(amt) + " USDC → " + c0.arc.name;
+        else label = (p.swap && !p.swap.identity ? "Swap & bridge → " : "Bridge → ") + c0.arc.name + (opts.destination ? " & " + (opts.destination.buttonLabel || "swap") : "");
       }
       btn.textContent = label; btn.disabled = disabled;
       // error / ok
@@ -1040,11 +1352,12 @@
       const anyStep = Object.keys(state.steps).length > 0;
       stepsBox.style.display = anyStep ? "" : "none";
       if (anyStep) {
-        stepsBox.replaceChildren(...stepsFor(opts.destination).map((s, i) => {
+        stepsBox.replaceChildren(...stepsFor(state.activePlan, opts.destination).map((s, i) => {
           const st = state.steps[s.key];
           const link = state.links[s.key];
           const sub = s.key === "mint" && st === "on" ? "Circle's forwarder submits the mint — nothing to sign." :
-                      s.key === "attest" && st === "on" ? "Waiting for source-chain finality + Circle signature." :
+                      s.key === "attest" && st === "on" ? (state.activePlan && state.activePlan.router === "lifi" ? "LI.FI is moving the funds; nothing to sign." : "Waiting for source-chain finality + Circle signature.") :
+                      s.key === "swap" && st === "on" ? "Confirm the swap in your wallet." :
                       s.key === "dest" && st === "on" ? "Confirm in your wallet on " + c0.arc.name + "." : null;
           const waitBtn = s.key === "dest" && st === "wait" && state.done
             ? el("button", { class: "abk-mini", style: "margin-left:8px", onclick: () => runDest(state.done) }, opts.destination.buttonLabel || "Run on Arc") : null;
@@ -1059,33 +1372,35 @@
     // initial
     (async () => {
       try { state.account = await c0.account(); } catch {}
+      await loadTokens();
       if (state.account) { refreshBalance(); resumePending(); }
-      if (amountIn.value) requote();
+      if (amountIn.value) replan();
       render();
     })();
 
-    // react to wallet account/chain changes
+    // react to wallet account changes
     try {
       const p = c0.provider;
       if (p && p.on) {
-        p.on("accountsChanged", (a) => { state.account = a && a[0] ? c0.ethers.getAddress(a[0]) : null; state.balance = null; refreshBalance(); render(); });
+        p.on("accountsChanged", (a) => { state.account = a && a[0] ? c0.ethers.getAddress(a[0]) : null; state.balance = null; refreshBalance(); replan(); render(); });
       }
     } catch {}
 
     return {
       core: c0,
       get account() { return state.account; },
-      setAccount(a) { state.account = a; state.balance = null; refreshBalance(); resumePending(); render(); },
-      setSource(key) { const s = c0.source(key); if (s) { state.source = s; chainSel.value = s.key; refreshBalance(); requote(); } },
+      setAccount(a) { state.account = a; state.balance = null; refreshBalance(); resumePending(); replan(); render(); },
+      setSource(key) { const s = c0.source(key); if (s) { state.source = s; chainSel.value = s.key; loadTokens().then(() => { refreshBalance(); replan(); }); } },
+      setPayToken(addr) { tokSel.value = addr; tokSel.dispatchEvent(new Event("change")); },
       setAmount(v) { amountIn.value = v; onAmount(); },
-      refresh() { refreshBalance(); requote(); renderPending(); },
+      refresh() { refreshBalance(); replan(); renderPending(); },
       destroy() { container.replaceChildren(); container.classList.remove("abk"); },
     };
   }
 
   return {
-    VERSION, ARC_DOMAIN, FORWARD_HOOK, FINALITY, CCTP, ARC, SOURCES, ABI,
+    VERSION, ARC_DOMAIN, FORWARD_HOOK, FINALITY, NATIVE, CCTP, LIFI, ARC, SOURCES, ABI, PAY_SYMBOLS,
     ArcBridge, mount,
-    utils: { parseUsdc, formatUsdc, toBytes32Address, computeFees, isAddress, jsonRpc, fetchJson },
+    utils: { parseUsdc, formatUsdc, parseUnits, formatUnits, toBytes32Address, computeFees, isAddress, jsonRpc, fetchJson, toTxRequest, payShortlist },
   };
 });
