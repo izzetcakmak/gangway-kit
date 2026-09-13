@@ -192,3 +192,14 @@ test("pending(): swapped-but-not-burned and LI.FI routing transfers stay in flig
   assert.equal(b.router, "auto");
   assert.equal(b.slippage, 0.005);
 });
+
+test("explainLifi turns LI.FI refusals into actionable messages", () => {
+  const { explainLifi } = Kit.utils;
+  const base = Kit.SOURCES.testnet.find((c) => c.key === "base-sepolia");
+  assert.match(explainLifi("No available quotes for the requested transfer", base, "testnet"), /smaller amount .*0\.001–0\.002 ETH/);
+  assert.match(explainLifi("No available quotes for the requested transfer", Kit.SOURCES.mainnet[0], "mainnet"), /10% price impact/);
+  assert.match(explainLifi("Rate limit exceeded, retry in 2 hours", base, "testnet"), /rate limit/i);
+  assert.match(explainLifi("Could not find token '0x79..' on chain '480'", base, "mainnet"), /does not list/);
+  assert.match(explainLifi("/fromChain must be equal to one of the allowed values", base, "testnet"), /does not serve/);
+  assert.match(explainLifi("something odd", base, "testnet"), /something odd/);
+});

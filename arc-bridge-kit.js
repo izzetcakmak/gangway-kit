@@ -292,6 +292,20 @@
     };
   }
 
+  /** Turn LI.FI's terse refusals into something a user can act on. */
+  function explainLifi(reason, src, network) {
+    const r = String(reason || "");
+    if (/rate limit/i.test(r)) return "LI.FI's public rate limit was hit. Wait a moment, or give the kit a LI.FI API key (lifiApiKey).";
+    if (/no available quotes/i.test(r)) {
+      return network === "testnet"
+        ? "LI.FI has no swap for that amount on " + src.name + ". Testnet pools are shallow: try a smaller amount (0.001–0.002 " + src.native.symbol + "), or pay with USDC."
+        : "LI.FI found no swap into USDC for that amount on " + src.name + " within a 10% price impact. Try a smaller amount or pay with USDC.";
+    }
+    if (/could not find token/i.test(r)) return "LI.FI does not list that token on " + src.name + ". Pay with USDC to bridge directly.";
+    if (/not supported|allowed values/i.test(r)) return "LI.FI does not serve " + src.name + ". Pay with USDC to bridge over CCTP.";
+    return "No LI.FI swap into USDC on " + src.name + ": " + r;
+  }
+
   /** LI.FI transactionRequest -> ethers TransactionRequest (drop legacy gasPrice, keep gasLimit). */
   function toTxRequest(t) {
     if (!t || !t.to || !t.data) throw new Error("LI.FI quote has no transactionRequest");
@@ -545,7 +559,7 @@
       let swap = null, usdcIn = amt;
       if (!sameAddr(token, src.usdc)) {
         swap = await this.quoteSwap(src, token, amt, fromAddress);
-        if (!swap.available) return { available: false, reason: "No LI.FI swap into USDC on " + src.name + ": " + swap.reason };
+        if (!swap.available) return { available: false, reason: explainLifi(swap.reason, src, this.network) };
         usdcIn = swap.toAmountMin; // plan on the guaranteed minimum; the real amount is measured after the swap
       }
       if (usdcIn < this.minAmount) return { available: false, reason: "That is less than " + formatUsdc(this.minAmount) + " USDC after the swap." };
@@ -1401,6 +1415,6 @@
   return {
     VERSION, ARC_DOMAIN, FORWARD_HOOK, FINALITY, NATIVE, CCTP, LIFI, ARC, SOURCES, ABI, PAY_SYMBOLS,
     ArcBridge, mount,
-    utils: { parseUsdc, formatUsdc, parseUnits, formatUnits, toBytes32Address, computeFees, isAddress, jsonRpc, fetchJson, toTxRequest, payShortlist },
+    utils: { parseUsdc, formatUsdc, parseUnits, formatUnits, toBytes32Address, computeFees, isAddress, jsonRpc, fetchJson, toTxRequest, payShortlist, explainLifi },
   };
 });
