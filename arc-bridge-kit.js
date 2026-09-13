@@ -678,6 +678,9 @@
 .abk-step.done{color:var(--abk-text)}
 .abk-step.done .d{background:var(--abk-accent);border-color:var(--abk-accent);color:#fff}
 .abk-step.done .d:before{content:"\\2713"}
+.abk-step.err{color:var(--abk-red)}
+.abk-step.err .d{border-color:var(--abk-red);color:var(--abk-red)}
+.abk-step.err .d:before{content:"!"}
 .abk-step a{color:var(--abk-accent);text-decoration:none;font-family:var(--abk-mono);font-size:12px}
 .abk-step a:hover{text-decoration:underline}
 .abk-step small{display:block;color:var(--abk-faint);font-size:11.5px}
@@ -851,6 +854,8 @@
         await follow(tr);
       } catch (e) {
         state.error = msgOf(e); emit({ type: "error", error: state.error });
+        // whatever step was live when it broke is the failed one; nothing keeps pulsing
+        for (const k of Object.keys(state.steps)) if (state.steps[k] === "on") state.steps[k] = "err";
       } finally { state.busy = false; render(); refreshBalance(); }
     }
 
