@@ -410,7 +410,12 @@
    *   minAmount     BigInt USDC minor units (default 1 USDC)
    *   router        "auto" (LI.FI route into Arc when it exists, else CCTP) | "cctp" | "lifi"
    *   lifiApiKey    optional LI.FI partner key (higher rate limits)
+   *   lifiApi       base URL for LI.FI calls (default https://li.quest/v1). Point it at your own
+   *                 proxy that adds the key server-side, so the key never ships to browsers.
    *   slippage      swap slippage as a fraction (default 0.005 = 0.5%)
+   *
+   * LI.FI without a key allows ~200 requests per 2 hours per IP, so the engine is thrifty:
+   * quotes are cached 45 s, the Arc-route probe 30 min, and a 429 pauses LI.FI calls for 10 min.
    */
   class ArcBridge {
     constructor(opts = {}) {
@@ -429,7 +434,10 @@
       this.minAmount = opts.minAmount ?? 1_000_000n;
       this.router = opts.router || "auto";
       this.lifiApiKey = opts.lifiApiKey || null;
+      this.lifiApi = (opts.lifiApi || LIFI.api).replace(/\/$/, "");
       this.slippage = opts.slippage ?? 0.005;
+      this._lifiBlockedUntil = 0;   // set when LI.FI answers 429; no calls until then
+      this._quoteCache = new Map();  // key -> { at, value }
       this.storageKey = "arcbridgekit:" + this.network + ":transfers";
       this._tokenCache = {};
       this._arcRouteCache = {};
@@ -458,7 +466,7 @@
     /** Tokens LI.FI can swap on a chain, cached per session. */
     async lifiTokens(chainId) {
       if (this._tokenCache[chainId]) return this._tokenCache[chainId];
-      const j = await fetchJson(`${LIFI.api}/tokens?chains=${chainId}`, 12000, this._lifiHeaders());
+      const j = await fetchJson(`${this.lifiApi}/tokens?chains=${chainId}`, 12000, this._lifiHeaders());
       const list = (j && j.tokens && j.tokens[String(chainId)]) || [];
       this._tokenCache[chainId] = list;
       return list;
@@ -476,7 +484,11 @@
      * or { available: false, reason }.
      */
     async lifiQuote({ fromChain, toChain, fromToken, toToken, fromAmount, fromAddress, toAddress, order }) {
+      if (Date.now() < this._lifiBlockedUntil) return { available: false, reason: "Rate limit exceeded (paused)" };
       const from = isAddress(fromAddress) ? fromAddress.toLowerCase() : "0x000000000000000000000000000000000000dead";
+      const key = [fromChain, toChain, fromToken, toToken, String(fromAmount), from, toAddress || "", order || ""].join("|").toLowerCase();
+      const hit = this._quoteCache.get(key);
+      if (hit && Date.now() - hit.at < 45_000) return hit.value;
       const q = new URLSearchParams({
         fromChain: String(fromChain), toChain: String(toChain), fromToken, toToken,
         fromAddress: from, fromAmount: String(fromAmount), slippage: String(this.slippage),
@@ -484,18 +496,28 @@
       });
       if (toAddress && isAddress(toAddress)) q.set("toAddress", toAddress.toLowerCase());
       if (order) q.set("order", order);
-      const j = await fetchJson(`${LIFI.api}/quote?${q}`, 15000, this._lifiHeaders());
-      if (!j) return { available: false, reason: "LI.FI did not answer" };
-      if (j.error || !j.estimate) return { available: false, reason: j.error || j.message || "no LI.FI route" };
-      const e = j.estimate;
-      return {
-        available: true, quote: j, tool: j.tool, type: j.type,
-        toAmount: BigInt(e.toAmount), toAmountMin: BigInt(e.toAmountMin || e.toAmount),
-        approvalAddress: e.approvalAddress || null, tx: toTxRequest(j.transactionRequest),
-        estSeconds: Number(e.executionDuration || 0),
-        gasUsd: (e.gasCosts || []).reduce((s, g) => s + Number(g.amountUSD || 0), 0),
-        feeUsd: (e.feeCosts || []).reduce((s, f) => s + Number(f.amountUSD || 0), 0),
-      };
+      const j = await fetchJson(`${this.lifiApi}/quote?${q}`, 15000, this._lifiHeaders());
+      let value;
+      if (!j) value = { available: false, reason: "LI.FI did not answer" };
+      else if (j.error || !j.estimate) {
+        const reason = j.error || j.message || "no LI.FI route";
+        if (/rate limit/i.test(reason)) this._lifiBlockedUntil = Date.now() + 10 * 60_000;
+        value = { available: false, reason };
+      } else {
+        const e = j.estimate;
+        value = {
+          available: true, quote: j, tool: j.tool, type: j.type,
+          toAmount: BigInt(e.toAmount), toAmountMin: BigInt(e.toAmountMin || e.toAmount),
+          approvalAddress: e.approvalAddress || null, tx: toTxRequest(j.transactionRequest),
+          estSeconds: Number(e.executionDuration || 0),
+          gasUsd: (e.gasCosts || []).reduce((s, g) => s + Number(g.amountUSD || 0), 0),
+          feeUsd: (e.feeCosts || []).reduce((s, f) => s + Number(f.amountUSD || 0), 0),
+        };
+      }
+      // a swap that is about to be sent must be fresh: bridge() clears the cache first
+      this._quoteCache.set(key, { at: Date.now(), value });
+      if (this._quoteCache.size > 50) this._quoteCache.delete(this._quoteCache.keys().next().value);
+      return value;
     }
 
     /** Same-chain swap quote into USDC on `source`. */
@@ -512,7 +534,7 @@
     async arcRouteAvailable(source, fromAddress) {
       const src = typeof source === "object" ? source : this.source(source);
       const c = this._arcRouteCache[src.chainId];
-      if (c && Date.now() - c.at < 600_000) return c.ok;
+      if (c && Date.now() - c.at < 1_800_000) return c.ok;
       const r = await this.lifiQuote({ fromChain: src.chainId, toChain: this.arc.chainId, fromToken: src.usdc,
         toToken: this.arc.usdc, fromAmount: 5_000_000n, fromAddress });
       this._arcRouteCache[src.chainId] = { at: Date.now(), ok: !!r.available };
@@ -704,6 +726,7 @@
       const owner = await signer.getAddress();
 
       onStep({ step: "planning" });
+      this._quoteCache.clear(); // never send a 45 s old swap route
       const plan = await this.plan({ source: src, payToken: token, fromAmount: amt, speed, fromAddress: owner, recipient });
       if (!plan.available) throw new Error(plan.reason);
 
@@ -799,7 +822,7 @@
     /** LI.FI status for a route transaction. */
     async lifiStatus(tr) {
       const q = new URLSearchParams({ txHash: tr.sendTx || tr.burnTx, fromChain: String(tr.sourceChainId), toChain: String(this.arc.chainId) });
-      return fetchJson(`${LIFI.api}/status?${q}`, 12000, this._lifiHeaders());
+      return fetchJson(`${this.lifiApi}/status?${q}`, 12000, this._lifiHeaders());
     }
 
     /**
@@ -1130,12 +1153,15 @@
     }
     function amountMinor() { try { return state.payToken ? parseUnits(amountIn.value, state.payToken.decimals) : null; } catch { return null; } }
     let amountTimer = null;
-    function onAmount() { clearTimeout(amountTimer); amountTimer = setTimeout(replan, 300); render(); }
+    function onAmount() { clearTimeout(amountTimer); amountTimer = setTimeout(replan, 700); render(); }
 
-    async function replan() {
+    let lastPlanKey = "";
+    async function replan(force) {
       const amt = amountMinor();
-      state.plan = null;
-      if (!amt || amt === 0n || !state.payToken) { render(); return; }
+      if (!amt || amt === 0n || !state.payToken) { state.plan = null; lastPlanKey = ""; render(); return; }
+      const key = [state.source.key, state.payToken.address, amt.toString(), state.speed, state.account || "", recipient()].join("|");
+      if (!force && key === lastPlanKey && state.plan) { render(); return; } // nothing changed, no new LI.FI call
+      lastPlanKey = key; state.plan = null;
       const my = state.planning = Symbol();
       render();
       const p = await c0.plan({ source: state.source, payToken: state.payToken.address, fromAmount: amt, speed: state.speed,
@@ -1407,7 +1433,7 @@
       setSource(key) { const s = c0.source(key); if (s) { state.source = s; chainSel.value = s.key; loadTokens().then(() => { refreshBalance(); replan(); }); } },
       setPayToken(addr) { tokSel.value = addr; tokSel.dispatchEvent(new Event("change")); },
       setAmount(v) { amountIn.value = v; onAmount(); },
-      refresh() { refreshBalance(); replan(); renderPending(); },
+      refresh() { refreshBalance(); replan(true); renderPending(); },
       destroy() { container.replaceChildren(); container.classList.remove("abk"); },
     };
   }
