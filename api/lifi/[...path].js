@@ -10,10 +10,12 @@ export default async function handler(req, res) {
   if (req.method !== "GET") return res.status(405).json({ message: "GET only" });
   const key = process.env.LIFI_API_KEY;
   if (!key) return res.status(503).json({ message: "LIFI_API_KEY not configured" });
-  const parts = [].concat(req.query.path || []);
+  // Vercel hands the catch-all segment over as query key "...path" (older runtimes: "path")
+  const raw = req.query["...path"] ?? req.query.path ?? [];
+  const parts = [].concat(raw).flatMap((x) => String(x).split("/")).filter(Boolean);
   if (parts.length !== 1 || !ALLOWED.has(parts[0])) return res.status(404).json({ message: "not proxied" });
   const url = new URL("https://li.quest/v1/" + parts[0]);
-  for (const [k, v] of Object.entries(req.query)) if (k !== "path") url.searchParams.set(k, String(v));
+  for (const [k, v] of Object.entries(req.query)) if (k !== "path" && k !== "...path") url.searchParams.set(k, String(v));
   try {
     const r = await fetch(url, { headers: { "x-lifi-api-key": key, accept: "application/json" } });
     const body = await r.text();
