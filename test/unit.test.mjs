@@ -203,3 +203,23 @@ test("explainLifi turns LI.FI refusals into actionable messages", () => {
   assert.match(explainLifi("/fromChain must be equal to one of the allowed values", base, "testnet"), /does not serve/);
   assert.match(explainLifi("something odd", base, "testnet"), /something odd/);
 });
+
+test("lifiFee / lifiIntegrator reach the LI.FI quote URL (mainnet-style 0.25%)", async () => {
+  const seen = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => { seen.push(String(url)); return { ok: false, json: async () => ({ message: "stub" }) }; };
+  try {
+    const b = new Kit.ArcBridge({ ethers: { getAddress: (a) => a }, network: "mainnet", storage: { get: () => null, set() {} },
+      lifiIntegrator: "anewone", lifiFee: 0.0025 });
+    await b.lifiQuote({ fromChain: 8453, toChain: 8453, fromToken: Kit.NATIVE, toToken: Kit.SOURCES.mainnet[0].usdc, fromAmount: 10n ** 16n, fromAddress: null });
+    const u = new URL(seen[0]);
+    assert.equal(u.searchParams.get("integrator"), "anewone");
+    assert.equal(u.searchParams.get("fee"), "0.0025");
+    // no fee configured: the parameter is absent, not "0"
+    const b0 = new Kit.ArcBridge({ ethers: { getAddress: (a) => a }, network: "testnet", storage: { get: () => null, set() {} } });
+    await b0.lifiQuote({ fromChain: 84532, toChain: 84532, fromToken: Kit.NATIVE, toToken: Kit.SOURCES.testnet[0].usdc, fromAmount: 10n ** 15n, fromAddress: null });
+    assert.equal(new URL(seen[1]).searchParams.get("fee"), null);
+    assert.equal(new URL(seen[1]).searchParams.get("integrator"), "arc-bridge-kit");
+  } finally { globalThis.fetch = realFetch; }
+  assert.throws(() => new Kit.ArcBridge({ ethers: { getAddress: (a) => a }, lifiFee: 1.5 }), /fraction/);
+});
