@@ -72,6 +72,36 @@ which is the ground truth regardless of what the forwarder reports.
 
 Returned handle: `{ core, account, setAccount(a), setSource(key), setAmount(v), refresh(), destroy() }`.
 
+## Bridge → swap on Arc (`destination`)
+
+Give the widget a `destination` and it runs a second leg on Arc as soon as the USDC lands:
+switch the wallet to Arc, build a transaction from the received amount, send it, track it.
+That is how a launchpad turns "bridge" into "bridge and buy" with no extra contracts. USDC is
+Arc's native token, so the freshly minted balance already covers gas and the buy.
+
+```js
+ArcBridgeKit.mount(el, {
+  ethers, network: "testnet", getProvider: () => window.ethereum,
+  destination: {
+    label: "Buy $NOAH on anewone",         // step 5 in the stepper
+    buttonLabel: "Buy $NOAH",              // retry button in the in-flight list
+    doneLabel: "$NOAH was bought",         // success line
+    auto: true,                            // prompt the wallet as soon as USDC lands
+    build: async ({ received, signer, ethers }) => {
+      const platform = new ethers.Contract(PLATFORM, ["function quoteBuy(address,uint256) view returns (uint256)", "function buy(address,uint256) payable"], signer);
+      const value = received * 10n ** 12n - 10n ** 16n;      // 6-dec USDC -> 18-dec native, keep 0.01 for gas
+      const minOut = (await platform.quoteBuy(TOKEN, value)) * 97n / 100n;
+      return { to: PLATFORM, value, data: platform.interface.encodeFunctionData("buy", [TOKEN, minOut]) };
+    },
+  },
+  onDestination: (t) => console.log("bought, tx", t.dest.tx),
+});
+```
+
+The demo wires this to anewone's Arc Testnet launchpad: pick a token under "Then on Arc".
+A transfer whose destination leg has not gone through stays in the in-flight list with a
+retry button, also after a refresh. Headless: `core.runDestination(transfer, destination)`.
+
 ## Headless use
 
 ```js

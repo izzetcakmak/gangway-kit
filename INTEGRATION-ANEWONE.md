@@ -84,7 +84,35 @@ is needed: `net` becomes `"mainnet"`, the kit reads the mainnet CCTP set, and th
 RPCs come from `cfg.mainnet.rpcs`. Circle already quotes forwarded routes into domain 26 on
 mainnet (verified 13 Sep 2026 with `npm run preflight:mainnet`).
 
-## 6. Optional: "bridge-and-buy" later (Senaryo 2)
+## 6. Bridge-and-buy: pass a `destination`
+
+On a token page, mount the widget with a `destination` that buys the current token with the
+bridged USDC. The kit switches the wallet to Arc, prompts one more signature and tracks it.
+
+```js
+destination: {
+  label: `Buy $${currentSymbol} on anewone`,
+  buttonLabel: `Buy $${currentSymbol}`,
+  doneLabel: `$${currentSymbol} was bought`,
+  build: async ({ received, signer, ethers }) => {
+    const c = platform.connect(signer);                       // anewone's ethers.Contract
+    const fee = await signer.provider.getFeeData();
+    const gasPrice = fee.maxFeePerGas || fee.gasPrice || 0n;
+    const reserve = gasPrice > 0n ? gasPrice * 400000n * 2n : 10n ** 16n;
+    const value = received * 10n ** 12n - reserve;            // 6-dec -> native 18-dec, keep gas
+    const q = await c.quoteBuy(currentToken, value);
+    return { to: platform.target, value, data: c.interface.encodeFunctionData("buy", [currentToken, applySlip(q)]) };
+  },
+},
+onDestination: () => refreshTokenPanel(),
+```
+
+The anti-snipe cap (`ANTI_SNIPE_MAX` for the first blocks after creation) and a graduated
+curve both revert `buy`; `quoteBuy` already reverts on graduated curves, so the error shows
+before the wallet is opened. Keep `recipient` as the connected wallet for this flow — the
+buyer must hold the minted USDC.
+
+## 7. Later: atomic mint+buy (custom hook)
 
 The engine exposes `hookData`-ready pieces (`ABI`, `CCTP`, `FORWARD_HOOK`). A follow-up can
 replace the `cctp-forward` hook with a custom receiver contract on Arc that swaps the minted
