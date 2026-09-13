@@ -141,9 +141,25 @@ The widget reads the host's tokens with fallbacks: `--accent`, `--surface`, `--s
 
 ```
 npm test                 # unit tests (fee maths, encoding, chain tables, LI.FI helpers)
-npm run preflight        # live read-only check of every testnet chain + Iris quotes + LI.FI swap quotes
+npm run preflight        # live read-only check of every testnet chain + Iris quotes (add --lifi for LI.FI lines)
 npm run preflight:mainnet
 ```
+
+## LI.FI rate limits (read this before shipping)
+
+Without a key LI.FI allows about **200 requests per 2 hours per IP**; with a free partner key
+from [portal.li.fi](https://portal.li.fi) it is 100–200 per minute. The engine is thrifty
+(quotes cached 45 s, the Arc-route probe 30 min, a 429 pauses LI.FI calls for 10 min, the widget
+only re-quotes when an input actually changed), but a busy page will still hit the keyless cap.
+
+Two ways to use a key:
+
+- `lifiApiKey: "…"` — sent as `x-lifi-api-key` from the browser. Fine for internal tools.
+- `lifiApi: "https://your.site/api/lifi"` — point the kit at your own proxy that adds the key
+  server-side. This repo ships one for Vercel (`api/lifi/[...path].js`, reads `LIFI_API_KEY`);
+  the demo uses it automatically when the env var is set.
+
+Paying with USDC never touches LI.FI, so the bridge keeps working even while rate-limited.
 
 ## Mainnet note
 

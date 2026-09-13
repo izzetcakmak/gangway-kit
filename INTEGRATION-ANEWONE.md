@@ -119,7 +119,13 @@ Nothing to configure: with the default `payWith: "any"` the amount field gets a 
 choice adds a "Swap to USDC" step in front of the bridge. Works on Base Sepolia today (LI.FI
 quotes ETH → USDC there), so the whole ETH → USDC → Arc → $NOAH chain can be rehearsed on testnet.
 When LI.FI opens routes into Arc, `router: "auto"` (default) turns the swap+bridge into one LI.FI
-transaction by itself. Pass `lifiApiKey` from the LI.FI partner portal for production rate limits.
+transaction by itself.
+
+**Rate limits are the one thing to set up.** Keyless LI.FI is ~200 requests / 2 h per visitor IP,
+which a launchpad page burns through fast. anewone is on Vercel, so copy `api/lifi/[...path].js`
+from the kit repo into anewone's `api/` folder, set `LIFI_API_KEY` in the Vercel project (key from
+portal.li.fi, free), and mount with `lifiApi: location.origin + "/api/lifi"`. The key stays on the
+server; the browser only ever sees anewone.xyz.
 
 ## 8. Later: atomic mint+buy (custom hook)
 
