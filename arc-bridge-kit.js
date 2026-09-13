@@ -475,7 +475,11 @@
     // ---- persistence
 
     transfers() { return this.storage.get(this.storageKey) || []; }
-    pending() { return this.transfers().filter((t) => !["minted", "failed", "dismissed"].includes(t.status)); }
+    pending() {
+      return this.transfers().filter((t) =>
+        !["failed", "dismissed"].includes(t.status) &&
+        !(t.status === "minted" && (!t.dest || t.dest.status === "done")));
+    }
     _save(tr) {
       const list = this.transfers();
       const i = list.findIndex((t) => t.id === tr.id);
@@ -495,7 +499,7 @@
      * onStep({ step, ...data }) fires: switching, quoting, approving, approved, burning, burned.
      * Resolves with the persisted transfer record once the burn tx is mined; call track() next.
      */
-    async bridge({ source, amount, recipient, speed = "fast", onStep = () => {} }) {
+    async bridge({ source, amount, recipient, speed = "fast", dest = false, onStep = () => {} }) {
       const src = typeof source === "object" ? source : this.source(source);
       if (!src) throw new Error("unknown source chain");
       const amt = BigInt(amount);
@@ -536,6 +540,7 @@
         sourceKey: src.key, sourceChainId: src.chainId, sourceDomain: src.domain,
         amount: amt.toString(), expectedFee: q.expectedFee.toString(), maxFee: q.maxFee.toString(),
         speed: q.speed, recipient: this.ethers.getAddress(recipient), sender: owner,
+        dest: dest ? { status: "pending" } : undefined,
         status: "burning", startedAt: Date.now(),
       });
       onStep({ step: "burn_sent", hash: tx.hash, url: this.explorerTx(src, tx.hash), transfer: tr });
@@ -625,6 +630,43 @@
       onStep({ step: "minted", transfer: tr });
       return tr;
     }
+
+    /** USDC minor units (6 dec) that landed on Arc for this transfer. */
+    receivedOf(tr) {
+      return BigInt(tr.received || (BigInt(tr.amount) - BigInt(tr.expectedFee || 0)));
+    }
+
+    /**
+     * Optional second leg on Arc once the USDC has landed, e.g. a launchpad buy. The host
+     * builds the transaction; the kit switches the wallet to Arc, sends it and records the
+     * outcome on the transfer so a refresh can resume or retry it.
+     *
+     * destination.build({ transfer, received, signer, ethers, arc }) -> ethers TransactionRequest
+     *   `received` is BigInt USDC minor units (6 dec). USDC is Arc's native token with 18
+     *   decimals at the RPC level, so a payable call wants `received * 10n ** 12n` (minus gas).
+     * onStep: switching, dest_building, dest_sending, dest_sent, dest_done
+     */
+    async runDestination(tr, destination, onStep = () => {}) {
+      if (tr.status !== "minted") throw new Error("USDC has not landed on Arc yet");
+      if (!destination || typeof destination.build !== "function") throw new Error("destination.build missing");
+      const received = this.receivedOf(tr);
+      tr.dest = { ...(tr.dest || {}), status: "pending" }; this._save(tr);
+      onStep({ step: "switching", chain: this.arc });
+      await this.ensureChain(this.arc);
+      const signer = await this._signer();
+      onStep({ step: "dest_building", received });
+      const req = await destination.build({ transfer: tr, received, signer, ethers: this.ethers, arc: this.arc });
+      if (!req || !req.to) throw new Error("destination.build returned no transaction");
+      onStep({ step: "dest_sending" });
+      const tx = await signer.sendTransaction(req);
+      tr.dest = { status: "sent", tx: tx.hash, at: Date.now() }; this._save(tr);
+      onStep({ step: "dest_sent", hash: tx.hash, url: this.explorerTx(this.arc, tx.hash) });
+      const rc = await tx.wait();
+      if (!rc || rc.status !== 1) { tr.dest.status = "failed"; this._save(tr); throw new Error("transaction on Arc reverted"); }
+      tr.dest.status = "done"; tr.dest.minedAt = Date.now(); this._save(tr);
+      onStep({ step: "dest_done", hash: tx.hash, url: this.explorerTx(this.arc, tx.hash), transfer: tr });
+      return tr;
+    }
   }
 
   // ------------------------------------------------------------------ UI
@@ -693,12 +735,15 @@
 .abk-ok a{color:var(--abk-accent);font-family:var(--abk-mono);font-size:12px;text-decoration:none}
 `;
 
-  const STEPS = [
+  const BASE_STEPS = [
     { key: "approve", label: "Approve USDC" },
     { key: "burn", label: "Burn on source chain" },
     { key: "attest", label: "Circle attestation" },
     { key: "mint", label: "Mint on Arc" },
   ];
+  const stepsFor = (destination) => destination
+    ? BASE_STEPS.concat([{ key: "dest", label: destination.label || "Swap on Arc" }])
+    : BASE_STEPS;
 
   function el(tag, attrs = {}, children = []) {
     const n = document.createElement(tag);
@@ -729,6 +774,10 @@
    *   defaultAmount string, e.g. "10"
    *   onEvent       (evt) => void — mirrors every step for analytics / host UI
    *   onMinted      (transfer) => void
+   *   destination   { label, build, auto=true, buttonLabel, doneLabel } — optional second leg on
+   *                 Arc after the mint (see ArcBridge.runDestination). With auto=true the wallet
+   *                 is prompted as soon as the USDC lands; otherwise a button appears.
+   *   onDestination (transfer) => void — fired when the destination leg is mined
    *   title         override header text
    */
   function mount(container, opts = {}) {
@@ -840,7 +889,7 @@
       const cr = core();
       try {
         const tr = await cr.bridge({
-          source: state.source, amount: amt, recipient: to, speed: state.speed,
+          source: state.source, amount: amt, recipient: to, speed: state.speed, dest: !!opts.destination,
           onStep: (s) => {
             emit({ type: s.step, ...s });
             if (s.step === "approving") setStep("approve", "on");
@@ -873,6 +922,10 @@
         if (s.step === "minted") {
           setStep("mint", "done", s.transfer.mintTx ? cr.explorerTx(cr.arc, s.transfer.mintTx) : cr.explorerAddress(cr.arc, s.transfer.recipient));
           state.done = s.transfer; opts.onMinted && opts.onMinted(s.transfer);
+          if (opts.destination && s.transfer.dest && s.transfer.dest.status !== "done") {
+            if (opts.destination.auto !== false) runDest(s.transfer);
+            else setStep("dest", "wait");
+          }
         }
         if (s.step === "stalled") { state.error = "Circle attested the transfer but the mint on Arc is late. Your USDC is safe; you can mint it yourself below."; }
         renderPending();
@@ -889,6 +942,21 @@
       renderPending();
     }
 
+    async function runDest(tr) {
+      state.error = ""; setStep("dest", "on");
+      try {
+        await core().runDestination(tr, opts.destination, (s) => {
+          emit({ type: s.step, ...s });
+          if (s.step === "dest_sent") setStep("dest", "on", s.url);
+          if (s.step === "dest_done") { setStep("dest", "done", s.url); state.done = s.transfer; opts.onDestination && opts.onDestination(s.transfer); }
+        });
+      } catch (e) {
+        state.error = msgOf(e); emit({ type: "error", error: state.error });
+        setStep("dest", "err");
+      }
+      renderPending(); render(); refreshBalance();
+    }
+
     async function manual(tr) {
       state.error = "";
       try {
@@ -903,10 +971,12 @@
       pendBox.replaceChildren(el("h4", {}, "In flight"), ...list.map((t) => {
         const src = c0.source(t.sourceKey) || { name: t.sourceKey, explorer: "" };
         const row = el("div", { class: "it" }, [
-          el("div", {}, [formatUsdc(t.amount) + " USDC from " + src.name + " · ", el("span", {}, t.status)]),
+          el("div", {}, [formatUsdc(t.amount) + " USDC from " + src.name + " · ", el("span", {}, t.status === "minted" && t.dest ? "on Arc, " + t.dest.status : t.status)]),
           el("div", { style: "display:flex;gap:6px" }, [
             el("a", { href: c0.explorerTx(src, t.burnTx), target: "_blank", rel: "noopener", class: "abk-mini" }, "tx"),
             t.status === "stalled" ? el("button", { class: "abk-mini", onclick: () => manual(t) }, "Mint on Arc") : null,
+            t.status === "minted" && opts.destination && t.dest && t.dest.status !== "done"
+              ? el("button", { class: "abk-mini", onclick: () => runDest(t) }, opts.destination.buttonLabel || "Run on Arc") : null,
             el("button", { class: "abk-mini", title: "Hide", onclick: () => { c0.dismiss(t.id); renderPending(); } }, "×"),
           ]),
         ]);
@@ -955,25 +1025,32 @@
       // error / ok
       errBox.style.display = state.error ? "" : "none"; errBox.textContent = state.error;
       if (state.done) {
-        const url = state.done.mintTx ? c0.explorerTx(c0.arc, state.done.mintTx) : c0.explorerAddress(c0.arc, state.done.recipient);
+        const d = state.done;
+        const url = d.mintTx ? c0.explorerTx(c0.arc, d.mintTx) : c0.explorerAddress(c0.arc, d.recipient);
+        const destDone = d.dest && d.dest.status === "done";
         okBox.replaceChildren(
-          "Done. " + (state.done.received ? formatUsdc(state.done.received) : formatUsdc(BigInt(state.done.amount) - BigInt(state.done.expectedFee))) +
-          " USDC arrived on " + c0.arc.name + " (" + short(state.done.recipient) + "). ",
-          url ? el("a", { href: url, target: "_blank", rel: "noopener" }, "view on explorer") : null);
+          (destDone ? "Done. " : "USDC landed. ") + formatUsdc(c0.receivedOf(d)) + " USDC arrived on " + c0.arc.name + " (" + short(d.recipient) + ")" +
+          (destDone ? " and " + ((opts.destination && opts.destination.doneLabel) || "the swap on Arc went through") + ". " : ". "),
+          destDone && d.dest.tx ? el("a", { href: c0.explorerTx(c0.arc, d.dest.tx), target: "_blank", rel: "noopener" }, "swap tx") : null,
+          destDone && d.dest.tx ? " · " : null,
+          url ? el("a", { href: url, target: "_blank", rel: "noopener" }, "mint on explorer") : null);
         okBox.style.display = "";
       } else okBox.style.display = "none";
       // steps
       const anyStep = Object.keys(state.steps).length > 0;
       stepsBox.style.display = anyStep ? "" : "none";
       if (anyStep) {
-        stepsBox.replaceChildren(...STEPS.map((s, i) => {
+        stepsBox.replaceChildren(...stepsFor(opts.destination).map((s, i) => {
           const st = state.steps[s.key];
           const link = state.links[s.key];
           const sub = s.key === "mint" && st === "on" ? "Circle's forwarder submits the mint — nothing to sign." :
-                      s.key === "attest" && st === "on" ? "Waiting for source-chain finality + Circle signature." : null;
-          return el("div", { class: "abk-step " + (st || "") }, [
-            el("div", { class: "d" }, st ? "" : String(i + 1)),
-            el("div", {}, [s.label, link ? [" ", el("a", { href: link, target: "_blank", rel: "noopener" }, "tx ↗")] : null, sub ? el("small", {}, sub) : null]),
+                      s.key === "attest" && st === "on" ? "Waiting for source-chain finality + Circle signature." :
+                      s.key === "dest" && st === "on" ? "Confirm in your wallet on " + c0.arc.name + "." : null;
+          const waitBtn = s.key === "dest" && st === "wait" && state.done
+            ? el("button", { class: "abk-mini", style: "margin-left:8px", onclick: () => runDest(state.done) }, opts.destination.buttonLabel || "Run on Arc") : null;
+          return el("div", { class: "abk-step " + (st === "wait" ? "" : (st || "")) }, [
+            el("div", { class: "d" }, st && st !== "wait" ? "" : String(i + 1)),
+            el("div", {}, [s.label, link ? [" ", el("a", { href: link, target: "_blank", rel: "noopener" }, "tx ↗")] : null, waitBtn, sub ? el("small", {}, sub) : null]),
           ]);
         }));
       }
