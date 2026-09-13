@@ -16,20 +16,27 @@
   main { max-width: 440px; margin: 0 auto; }
   h1 { font-size: 18px; margin: 0 0 4px; }
   p { color: var(--dim); font-size: 13px; margin: 0 0 16px; }
-  .bar { display: flex; gap: 8px; margin-bottom: 14px; align-items: center; }
-  select, button.sm { font: inherit; font-size: 13px; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); color: var(--text); }
-  pre { font-size: 11px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 10px; max-height: 200px; overflow: auto; margin-top: 16px; color: var(--dim); }
+  .bar { display: flex; gap: 8px; margin-bottom: 10px; align-items: center; flex-wrap: wrap; font-size: 13px; }
+  .bar label { color: var(--dim); }
+  select, button.sm { font: inherit; font-size: 13px; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); color: var(--text); max-width: 100%; }
+  pre { font-size: 11px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 10px; max-height: 200px; overflow: auto; margin-top: 16px; color: var(--dim); white-space: pre-wrap; word-break: break-all; }
+  .hint { font-size: 12px; color: var(--faint); margin: 0 0 14px; }
 </style>
 </head>
 <body>
 <main>
   <h1>arc-bridge-kit</h1>
-  <p>Bridge USDC from any CCTP chain to Arc with one signature. Circle's Forwarding Service mints on Arc; no gas needed there.</p>
+  <p>Bridge USDC from any CCTP chain to Arc with one signature, then (optionally) buy a launchpad token with it in the same flow.</p>
   <div class="bar">
     <label for="net">Network</label>
     <select id="net"><option value="testnet">testnet</option><option value="mainnet">mainnet</option></select>
     <button class="sm" id="reset">Clear pending</button>
   </div>
+  <div class="bar">
+    <label for="buy">Then on Arc</label>
+    <select id="buy"><option value="">just bridge USDC</option></select>
+  </div>
+  <p class="hint" id="hint">Loading open tokens from anewone (Arc Testnet)…</p>
   <div id="bridge"></div>
   <pre id="log">events…</pre>
 </main>
@@ -39,14 +46,85 @@
 <script>
   const logEl = document.getElementById("log");
   const log = (e) => { logEl.textContent = new Date().toLocaleTimeString() + "  " + JSON.stringify(e, (k, v) => typeof v === "bigint" ? v.toString() : v).slice(0, 300) + "\n" + logEl.textContent; };
+
+  // ---- anewone.xyz launchpad on Arc Testnet: the "swap" leg buys a bonding-curve token with the bridged USDC
+  const ANEWONE = {
+    testnet: { platform: "0x99Bd23c2DD814055a4A2438912C6b4eD2Ae9Ebcf", explorer: "https://testnet.arcscan.app", site: "https://anewone.xyz" },
+    mainnet: null, // filled once anewone's mainnet platform is live
+  };
+  const PLATFORM_ABI = [
+    "function tokensCount() view returns (uint256)",
+    "function allTokens(uint256) view returns (address)",
+    "function info(address) view returns (address creator, uint64 createdBlock, bool graduated, uint256 vUsdc, uint256 tReserve, uint256 raised, string metadataURI)",
+    "function quoteBuy(address token, uint256 usdcIn) view returns (uint256)",
+    "function buy(address token, uint256 minTokensOut) payable",
+  ];
+  const openTokens = {}; // network -> [{address, symbol, name}]
+
+  async function loadTokens(network) {
+    const cfg = ANEWONE[network];
+    const sel = document.getElementById("buy");
+    const hint = document.getElementById("hint");
+    sel.replaceChildren(new Option("just bridge USDC", ""));
+    if (!cfg) { hint.textContent = "No launchpad configured on " + network + " yet — bridge only."; return; }
+    if (openTokens[network]) { fill(); return; }
+    try {
+      const arc = ArcBridgeKit.ARC[network];
+      const p = new ethers.JsonRpcProvider(arc.rpcs[0], undefined, { staticNetwork: true });
+      const platform = new ethers.Contract(cfg.platform, PLATFORM_ABI, p);
+      const n = Number(await platform.tokensCount());
+      const out = [];
+      for (let i = n - 1; i >= 0 && out.length < 8; i--) {
+        const a = await platform.allTokens(i);
+        const inf = await platform.info(a);
+        if (inf.graduated) continue;
+        const t = new ethers.Contract(a, ["function symbol() view returns (string)", "function name() view returns (string)"], p);
+        let symbol = a.slice(0, 8), name = "";
+        try { symbol = await t.symbol(); name = await t.name(); } catch {}
+        out.push({ address: a, symbol, name });
+      }
+      openTokens[network] = out;
+      fill();
+    } catch (e) { hint.textContent = "Could not load tokens: " + (e.shortMessage || e.message); }
+    function fill() {
+      for (const t of openTokens[network]) sel.add(new Option("buy $" + t.symbol + " (" + t.name + ") on anewone", t.address));
+      hint.textContent = openTokens[network].length + " open bonding curves on anewone · the whole bridged amount (minus gas) is spent, 3% slippage guard.";
+    }
+  }
+
+  function destinationFor(network) {
+    const cfg = ANEWONE[network];
+    const addr = document.getElementById("buy").value;
+    if (!cfg || !addr) return null;
+    const tok = (openTokens[network] || []).find((t) => t.address === addr) || { symbol: addr.slice(0, 8) };
+    return {
+      label: "Buy $" + tok.symbol + " on anewone",
+      buttonLabel: "Buy $" + tok.symbol,
+      doneLabel: "$" + tok.symbol + " was bought on anewone",
+      auto: true,
+      build: async ({ received, signer, ethers }) => {
+        const platform = new ethers.Contract(cfg.platform, PLATFORM_ABI, signer);
+        // USDC is Arc's native token: 6-dec minor units from CCTP -> 18-dec wei on the RPC
+        const native = received * 10n ** 12n;
+        const fee = await signer.provider.getFeeData();
+        const gasPrice = fee.maxFeePerGas || fee.gasPrice || 0n;
+        const reserve = gasPrice > 0n ? gasPrice * 400000n * 2n : 10n ** 16n; // keep gas for this tx
+        const value = native - reserve;
+        if (value <= 0n) throw new Error("bridged amount too small to cover gas on Arc");
+        const quoted = await platform.quoteBuy(addr, value);
+        const minOut = quoted * 97n / 100n;
+        return { to: cfg.platform, value, data: platform.interface.encodeFunctionData("buy", [addr, minOut]) };
+      },
+    };
+  }
+
   // ?mock=1 → a read-only fake EIP-1193 provider so the UI can be developed without a wallet.
-  // It reports Base Sepolia + a fixed account and accepts chain switches; any signing call throws.
+  // Reads are forwarded to the chain's public RPC; any signing call is rejected EIP-1193 style.
   const MOCK = new URLSearchParams(location.search).get("mock");
   const mockProvider = (() => {
     if (!MOCK) return null;
     let chainId = "0x14a34";
     const account = "0x000000000000000000000000000000000000dEaD";
-    // reads are forwarded to the chain's public RPC so balances / allowances are real
     const rpcFor = (hex) => {
       const id = parseInt(hex, 16);
       const all = [...ArcBridgeKit.SOURCES.testnet, ...ArcBridgeKit.SOURCES.mainnet, ArcBridgeKit.ARC.testnet, ArcBridgeKit.ARC.mainnet];
@@ -64,7 +142,6 @@
           case "wallet_addEthereumChain": return null;
           case "net_version": return String(parseInt(chainId, 16));
           case "eth_sendTransaction": case "eth_sign": case "personal_sign": case "eth_signTypedData_v4":
-            // EIP-1193 shaped rejection (4001) so ethers surfaces it as ACTION_REJECTED
             throw Object.assign(new Error("mock provider cannot sign (" + method + ") — connect a real wallet to bridge"), { code: 4001 });
           default: {
             const url = rpcFor(chainId);
@@ -77,27 +154,34 @@
       },
     };
   })();
+
   let kit = null;
   function boot() {
     const network = document.getElementById("net").value;
     if (kit) kit.destroy();
     const provider = mockProvider || window.ethereum;
     if (!provider) { document.getElementById("bridge").textContent = "No wallet found. Install MetaMask (or any EIP-1193 wallet) to try the demo."; return; }
+    const destination = destinationFor(network);
     kit = ArcBridgeKit.mount(document.getElementById("bridge"), {
       ethers: window.ethers,
       network,
       getProvider: () => provider,
       defaultAmount: network === "testnet" ? "1" : "",
+      destination,
+      title: destination ? "Bridge USDC & buy on anewone" : undefined,
       onEvent: log,
       onMinted: (t) => log({ MINTED: t.received, recipient: t.recipient }),
+      onDestination: (t) => log({ BOUGHT: true, tx: t.dest.tx }),
     });
   }
-  document.getElementById("net").addEventListener("change", boot);
+  document.getElementById("net").addEventListener("change", async () => { await loadTokens(document.getElementById("net").value); boot(); });
+  document.getElementById("buy").addEventListener("change", boot);
   document.getElementById("reset").addEventListener("click", () => {
     Object.keys(localStorage).filter((k) => k.startsWith("arcbridgekit:")).forEach((k) => localStorage.removeItem(k));
     boot();
   });
   boot();
+  loadTokens("testnet");
 </script>
 </body>
 </html>
