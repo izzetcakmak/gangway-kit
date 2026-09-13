@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>arc-bridge-kit demo</title>
+<style>
+  :root { --accent: #00b877; --surface: #fff; --surface-2: #ececee; --text: #111116; --dim: #5f5f6d;
+          --faint: #8b8b98; --border: rgba(16,16,24,.09); --border-2: rgba(16,16,24,.16); --r-md: 14px; --r-sm: 10px; }
+  body { font-family: Inter, system-ui, sans-serif; margin: 0; padding: 32px 16px; background: #f4f4f5; color: var(--text); }
+  @media (prefers-color-scheme: dark) {
+    :root { --accent: #3ee6a0; --surface: #151519; --surface-2: #1b1b20; --text: #f2f2f5; --dim: #a0a0ae;
+            --faint: #6e6e7c; --border: rgba(255,255,255,.09); --border-2: rgba(255,255,255,.16); }
+    body { background: #0d0d10; color: #f2f2f5; }
+  }
+  main { max-width: 440px; margin: 0 auto; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  p { color: var(--dim); font-size: 13px; margin: 0 0 16px; }
+  .bar { display: flex; gap: 8px; margin-bottom: 14px; align-items: center; }
+  select, button.sm { font: inherit; font-size: 13px; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); color: var(--text); }
+  pre { font-size: 11px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 10px; max-height: 200px; overflow: auto; margin-top: 16px; color: var(--dim); }
+</style>
+</head>
+<body>
+<main>
+  <h1>arc-bridge-kit</h1>
+  <p>Bridge USDC from any CCTP chain to Arc with one signature. Circle's Forwarding Service mints on Arc; no gas needed there.</p>
+  <div class="bar">
+    <label for="net">Network</label>
+    <select id="net"><option value="testnet">testnet</option><option value="mainnet">mainnet</option></select>
+    <button class="sm" id="reset">Clear pending</button>
+  </div>
+  <div id="bridge"></div>
+  <pre id="log">events…</pre>
+</main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/6.13.4/ethers.umd.min.js"></script>
+<script src="../arc-bridge-kit.js"></script>
+<script>
+  const logEl = document.getElementById("log");
+  const log = (e) => { logEl.textContent = new Date().toLocaleTimeString() + "  " + JSON.stringify(e, (k, v) => typeof v === "bigint" ? v.toString() : v).slice(0, 300) + "\n" + logEl.textContent; };
+  // ?mock=1 → a read-only fake EIP-1193 provider so the UI can be developed without a wallet.
+  // It reports Base Sepolia + a fixed account and accepts chain switches; any signing call throws.
+  const MOCK = new URLSearchParams(location.search).get("mock");
+  const mockProvider = (() => {
+    if (!MOCK) return null;
+    let chainId = "0x14a34";
+    const account = "0x000000000000000000000000000000000000dEaD";
+    // reads are forwarded to the chain's public RPC so balances / allowances are real
+    const rpcFor = (hex) => {
+      const id = parseInt(hex, 16);
+      const all = [...ArcBridgeKit.SOURCES.testnet, ...ArcBridgeKit.SOURCES.mainnet, ArcBridgeKit.ARC.testnet, ArcBridgeKit.ARC.mainnet];
+      const c = all.find((x) => x.chainId === id);
+      return c && c.rpcs[0];
+    };
+    return {
+      isMock: true,
+      on() {}, removeListener() {},
+      async request({ method, params = [] }) {
+        switch (method) {
+          case "eth_chainId": return chainId;
+          case "eth_accounts": case "eth_requestAccounts": return [account];
+          case "wallet_switchEthereumChain": chainId = params[0].chainId; return null;
+          case "wallet_addEthereumChain": return null;
+          case "net_version": return String(parseInt(chainId, 16));
+          case "eth_sendTransaction": case "eth_sign": case "personal_sign": case "eth_signTypedData_v4":
+            throw new Error("mock provider cannot sign (" + method + ") — connect a real wallet to bridge");
+          default: {
+            const url = rpcFor(chainId);
+            if (!url) throw new Error("mock: no RPC for chain " + chainId);
+            const r = await ArcBridgeKit.utils.jsonRpc(url, method, params);
+            if (r == null) throw new Error("mock: " + method + " failed on " + url);
+            return r;
+          }
+        }
+      },
+    };
+  })();
+  let kit = null;
+  function boot() {
+    const network = document.getElementById("net").value;
+    if (kit) kit.destroy();
+    const provider = mockProvider || window.ethereum;
+    if (!provider) { document.getElementById("bridge").textContent = "No wallet found. Install MetaMask (or any EIP-1193 wallet) to try the demo."; return; }
+    kit = ArcBridgeKit.mount(document.getElementById("bridge"), {
+      ethers: window.ethers,
+      network,
+      getProvider: () => provider,
+      defaultAmount: network === "testnet" ? "1" : "",
+      onEvent: log,
+      onMinted: (t) => log({ MINTED: t.received, recipient: t.recipient }),
+    });
+  }
+  document.getElementById("net").addEventListener("change", boot);
+  document.getElementById("reset").addEventListener("click", () => {
+    Object.keys(localStorage).filter((k) => k.startsWith("arcbridgekit:")).forEach((k) => localStorage.removeItem(k));
+    boot();
+  });
+  boot();
+</script>
+</body>
+</html>
