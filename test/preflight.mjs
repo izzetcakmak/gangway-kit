@@ -4,14 +4,17 @@
 // quotes a forwarded route to Arc, and (informational) whether LI.FI swaps the native coin
 // into USDC there and whether LI.FI already routes straight into Arc. Never sends a transaction.
 //
-//   node test/preflight.mjs            # testnet (default)
+//   node test/preflight.mjs                 # testnet (default)
 //   node test/preflight.mjs mainnet
+//   node test/preflight.mjs mainnet --lifi  # also ask LI.FI per chain (costs ~2 keyless requests each)
 import { createRequire } from "node:module";
 const require = createRequire(import.meta.url);
 const Kit = require("../arc-bridge-kit.js");
 const { jsonRpc, fetchJson, computeFees } = Kit.utils;
 
 const network = process.argv[2] === "mainnet" ? "mainnet" : "testnet";
+// LI.FI's keyless budget is ~200 requests / 2 h per IP; the two LI.FI lines per chain are opt-in.
+const LIFI_CHECK = process.argv.includes("--lifi");
 const cctp = Kit.CCTP[network];
 const core = new Kit.ArcBridge({ ethers: { getAddress: (a) => a }, network, storage: { get: () => null, set() {} } });
 const pad = (n) => BigInt(n).toString(16).padStart(64, "0");
@@ -54,6 +57,7 @@ for (const c of Kit.SOURCES[network]) {
   const fees = await fetchJson(`${cctp.iris}/v2/burn/USDC/fees/${c.domain}/26?forward=true`);
   const q = computeFees(fees, 10_000_000n, c.fast ? "fast" : "standard");
   ok(!!q, q ? `Iris forwarded quote for 10 USDC: protocol ${q.protocolFee} + forward ${q.forwardFee} minor units (${q.speed})` : "Iris has no forwarded quote");
+  if (!LIFI_CHECK) continue;
   // LI.FI legs are informational: a chain without a LI.FI swap still bridges USDC over CCTP.
   const swap = await core.quoteSwap(c, Kit.NATIVE, 10n ** 15n, null);
   console.log(`  info  LI.FI swap 0.001 ${c.native.symbol} -> USDC: ${swap.available ? "yes via " + swap.tool + " (≈ " + swap.toAmount + " minor)" : "no (" + swap.reason + ")"}`);
