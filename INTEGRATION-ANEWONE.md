@@ -112,7 +112,16 @@ curve both revert `buy`; `quoteBuy` already reverts on graduated curves, so the 
 before the wallet is opened. Keep `recipient` as the connected wallet for this flow — the
 buyer must hold the minted USDC.
 
-## 7. Later: atomic mint+buy (custom hook)
+## 7. Paying with something other than USDC (LI.FI)
+
+Nothing to configure: with the default `payWith: "any"` the amount field gets a token menu
+(native coin, USDC, then WETH/USDT/DAI/cbBTC/... as LI.FI lists them on that chain). A non-USDC
+choice adds a "Swap to USDC" step in front of the bridge. Works on Base Sepolia today (LI.FI
+quotes ETH → USDC there), so the whole ETH → USDC → Arc → $NOAH chain can be rehearsed on testnet.
+When LI.FI opens routes into Arc, `router: "auto"` (default) turns the swap+bridge into one LI.FI
+transaction by itself. Pass `lifiApiKey` from the LI.FI partner portal for production rate limits.
+
+## 8. Later: atomic mint+buy (custom hook)
 
 The engine exposes `hookData`-ready pieces (`ABI`, `CCTP`, `FORWARD_HOOK`). A follow-up can
 replace the `cctp-forward` hook with a custom receiver contract on Arc that swaps the minted

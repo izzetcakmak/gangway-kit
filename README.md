@@ -1,9 +1,15 @@
 # arc-bridge-kit
 
-Drop-in **"Bridge USDC to Arc"** widget and headless engine, built on **Circle CCTP V2 + Forwarding Service**.
+Drop-in **"pay with anything, land USDC on Arc, then buy"** widget and headless engine.
+Swaps by **LI.FI**, bridging by **Circle CCTP V2 + Forwarding Service**, an optional last leg on Arc.
 
-- **One signature** on the source chain (plus a one-time USDC approval). Circle's Forwarding
-  Service submits the mint on Arc itself, so the user needs **no gas on Arc**.
+- **Pay with any token** the user holds (ETH, cbBTC, USDT, ...): LI.FI swaps it into USDC on the
+  source chain first. Pay with USDC and the swap leg simply disappears.
+- **One bridge signature** on the source chain. Circle's Forwarding Service submits the mint on
+  Arc itself, so the user needs **no gas on Arc**.
+- **LI.FI-ready for Arc**: `router: "auto"` probes LI.FI for a direct route into Arc on every
+  quote; the day LI.FI opens Arc, any-token → USDC-on-Arc becomes one LI.FI transaction and CCTP
+  stays as the fallback. Nothing to redeploy.
 - **Fast Transfer** (~20 s) or **Standard** (no protocol fee, source-chain finality).
 - **14 mainnet / 13 testnet source chains**: Base, Ethereum, Arbitrum, OP, Polygon, Avalanche,
   Unichain, Linea, World Chain, Sonic, Monad, Sei, HyperEVM, Ink (+ their testnets).
@@ -36,8 +42,9 @@ Open `demo/index.html` through any static server (`python -m http.server 4173`) 
 ## How a transfer flows
 
 ```
-source chain                 Circle                          Arc
-────────────                 ──────                          ───
+source chain                                  Circle                       Arc
+────────────                                  ──────                       ───
+[LI.FI swap: any token → USDC]   (only when paying with something else)
 approve USDC → TokenMessengerV2
 depositForBurnWithHook(
    amount, 26, recipient,
@@ -49,7 +56,12 @@ depositForBurnWithHook(
 ```
 
 The widget polls Iris for the attestation and then the recipient's USDC balance on Arc,
-which is the ground truth regardless of what the forwarder reports.
+which is the ground truth regardless of what the forwarder reports. With `router: "lifi"` (or
+`"auto"` once LI.FI lists Arc) the middle column is LI.FI's route and `/v1/status` is polled
+instead; the balance check on Arc stays.
+
+A swap that went through while the page was closed is not lost: the transfer shows up as
+`swapped` in the in-flight list with a **Bridge now** button (`core.continueBridge`).
 
 ## Options (`ArcBridgeKit.mount(el, opts)`)
 
@@ -65,8 +77,12 @@ which is the ground truth regardless of what the forwarder reports.
 | `sources` | `string[]` | restrict the chain list, e.g. `["base","arbitrum","ethereum"]` |
 | `defaultSource`, `defaultAmount` | | pre-fill |
 | `minAmount` | BigInt minor units | default 1 USDC |
+| `payWith` | `"any"` \| `"usdc"` | `"any"` shows the LI.FI shortlist (native, USDC, WETH, USDT, DAI, cbBTC, ...); `"usdc"` hides the swap leg |
+| `router` | `"auto"` \| `"cctp"` \| `"lifi"` | `"auto"` = LI.FI route into Arc when it exists, else swap+CCTP |
+| `slippage` | number | swap slippage fraction, default `0.005` |
+| `lifiApiKey` | string | optional LI.FI partner key (higher rate limits) |
 | `feeHeadroom` | BigInt | `maxFee = quoted fee × headroom`, default `2n` (cap only, not charged) |
-| `onEvent` | `(evt) => void` | every step: `switching, quoting, approving, approve_sent, approved, burning, burn_sent, burned, attesting, attested, forwarding, minted, stalled, error` |
+| `onEvent` | `(evt) => void` | every step: `switching, planning, approving, approve_sent, approved, burning, burn_sent, burned, attesting, attested, forwarding, minted, stalled, error` |
 | `onMinted` | `(transfer) => void` | fired when USDC lands on Arc |
 | `title` | string | header text |
 
@@ -106,8 +122,8 @@ retry button, also after a refresh. Headless: `core.runDestination(transfer, des
 
 ```js
 const core = new ArcBridgeKit.ArcBridge({ ethers, network: "mainnet", provider: window.ethereum });
-const quote = await core.quote("base", ArcBridgeKit.utils.parseUsdc("25"), "fast");
-const tr = await core.bridge({ source: "base", amount: quote.amount, recipient: "0x…", onStep: console.log });
+const plan = await core.plan({ source: "base", payToken: ArcBridgeKit.NATIVE, fromAmount: 10n ** 16n, fromAddress: me }); // 0.01 ETH
+const tr = await core.bridge({ source: "base", payToken: ArcBridgeKit.NATIVE, amount: 10n ** 16n, recipient: me, onStep: console.log });
 await core.track(tr, console.log);          // resolves when USDC is on Arc
 // if track() returns status "stalled":  await core.manualMint(tr);
 ```
@@ -124,8 +140,8 @@ The widget reads the host's tokens with fallbacks: `--accent`, `--surface`, `--s
 ## Scripts
 
 ```
-npm test                 # unit tests (fee maths, encoding, chain tables)
-npm run preflight        # live read-only check of every testnet chain + Iris quotes
+npm test                 # unit tests (fee maths, encoding, chain tables, LI.FI helpers)
+npm run preflight        # live read-only check of every testnet chain + Iris quotes + LI.FI swap quotes
 npm run preflight:mainnet
 ```
 
@@ -143,5 +159,8 @@ Arc mainnet RPC/explorer URLs because none were public at the time of writing; p
 - The burn is refused when `maxFee >= amount` or the route has no forwarding quote.
 - The approval is for the exact amount, never unlimited.
 - Fees come from Circle's live API per transfer; nothing is hard-coded.
+- The bridged amount after a swap is the **measured** USDC delta in the wallet, not the quote.
+- LI.FI transactions are sent exactly as quoted (`to`, `data`, `value`, `gasLimit`); the kit never
+  builds swap calldata itself.
 
 MIT © izzetcakmak
