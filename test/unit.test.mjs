@@ -120,3 +120,23 @@ test("ArcBridge constructs headless with a fake ethers and filters sources", () 
   assert.equal(b.pending().length, 0);
   assert.throws(() => new Kit.ArcBridge({}), /ethers/);
 });
+
+test("pending(): a minted transfer stays in flight until its destination leg is done", () => {
+  const mem = new Map();
+  const storage = { get: (k) => mem.get(k) ?? null, set: (k, v) => mem.set(k, v) };
+  const b = new Kit.ArcBridge({ ethers: { getAddress: (a) => a }, network: "testnet", storage });
+  b._save({ id: "a", status: "minted" });                              // plain bridge: done
+  b._save({ id: "b", status: "minted", dest: { status: "pending" } }); // buy not yet sent
+  b._save({ id: "c", status: "minted", dest: { status: "failed" } });  // buy reverted: retryable
+  b._save({ id: "d", status: "minted", dest: { status: "done" } });    // buy mined
+  b._save({ id: "e", status: "attesting", dest: { status: "pending" } });
+  assert.deepEqual(b.pending().map((t) => t.id).sort(), ["b", "c", "e"]);
+  assert.equal(b.receivedOf({ received: "980000" }), 980000n);
+  assert.equal(b.receivedOf({ amount: "1000000", expectedFee: "20000" }), 980000n);
+});
+
+test("runDestination refuses a transfer that has not landed", async () => {
+  const b = new Kit.ArcBridge({ ethers: { getAddress: (a) => a }, network: "testnet", storage: { get: () => null, set() {} } });
+  await assert.rejects(() => b.runDestination({ status: "attesting" }, { build: async () => ({}) }), /not landed/);
+  await assert.rejects(() => b.runDestination({ status: "minted" }, {}), /build missing/);
+});
