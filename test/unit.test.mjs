@@ -140,3 +140,55 @@ test("runDestination refuses a transfer that has not landed", async () => {
   await assert.rejects(() => b.runDestination({ status: "attesting" }, { build: async () => ({}) }), /not landed/);
   await assert.rejects(() => b.runDestination({ status: "minted" }, {}), /build missing/);
 });
+
+test("toTxRequest: LI.FI transactionRequest -> ethers request (hex value/gasLimit, no gasPrice)", () => {
+  const { toTxRequest } = Kit.utils;
+  const r = toTxRequest({ to: "0x1231DEB6f5749EF6cE6943a275A1D3E7486F4EaE", data: "0xabcd", value: "0x1c6bf52634000", gasLimit: "0x1050ef", chainId: 8453, gasPrice: "0x5f5e100", from: "0xdead" });
+  assert.equal(r.to, "0x1231DEB6f5749EF6cE6943a275A1D3E7486F4EaE");
+  assert.equal(r.value, 500000000000000n);
+  assert.equal(r.gasLimit, 1069295n);
+  assert.equal(r.chainId, 8453);
+  assert.equal("gasPrice" in r, false);
+  assert.equal("from" in r, false);
+  assert.throws(() => toTxRequest(null));
+  assert.throws(() => toTxRequest({ to: "0x1" }));
+});
+
+test("payShortlist: native first, USDC second, curated symbols in order, no duplicates", () => {
+  const { payShortlist } = Kit.utils;
+  const base = Kit.SOURCES.mainnet.find((c) => c.key === "base");
+  const tokens = [
+    { address: "0x4200000000000000000000000000000000000006", symbol: "WETH", name: "Wrapped Ether", decimals: 18 },
+    { address: "0x0000000000000000000000000000000000000000", symbol: "ETH", name: "ETH", decimals: 18 },
+    { address: base.usdc, symbol: "USDC", name: "USD Coin", decimals: 6 },
+    { address: "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf", symbol: "cbBTC", name: "Coinbase BTC", decimals: 8 },
+    { address: "0xfde4C96c8593536E31F229EA8f37b2ADa2699bb2", symbol: "USDT", name: "Tether", decimals: 6 },
+    { address: "0xdeadbeef00000000000000000000000000000000", symbol: "JUNK", name: "junk", decimals: 18 },
+  ];
+  const out = payShortlist(tokens, base);
+  assert.deepEqual(out.map((t) => t.symbol), ["ETH", "USDC", "WETH", "USDT", "cbBTC"]);
+  assert.equal(out[4].decimals, 8);
+  // no LI.FI list at all: still native + USDC from the chain config
+  assert.deepEqual(payShortlist(null, base).map((t) => t.symbol), ["ETH", "USDC"]);
+});
+
+test("parseUnits / formatUnits handle 18 and 8 decimals", () => {
+  const { parseUnits, formatUnits } = Kit.utils;
+  assert.equal(parseUnits("0.0005", 18), 500000000000000n);
+  assert.equal(parseUnits("1.5", 8), 150000000n);
+  assert.equal(formatUnits(500000000000000n, 18, 6), "0.0005");
+  assert.equal(formatUnits(150000000n, 8), "1.50");
+  assert.throws(() => parseUnits("1.123456789", 8), /8 decimals/);
+});
+
+test("pending(): swapped-but-not-burned and LI.FI routing transfers stay in flight", () => {
+  const mem = new Map();
+  const storage = { get: (k) => mem.get(k) ?? null, set: (k, v) => mem.set(k, v) };
+  const b = new Kit.ArcBridge({ ethers: { getAddress: (a) => a }, network: "mainnet", storage });
+  b._save({ id: "s", status: "swapped", amount: "1250000" });
+  b._save({ id: "r", status: "routing", router: "lifi" });
+  b._save({ id: "f", status: "failed" });
+  assert.deepEqual(b.pending().map((t) => t.id).sort(), ["r", "s"]);
+  assert.equal(b.router, "auto");
+  assert.equal(b.slippage, 0.005);
+});
