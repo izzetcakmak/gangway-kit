@@ -155,6 +155,11 @@
     };
   })();
 
+  // LI.FI without a key allows ~200 requests / 2 h per IP. When this deployment has a LIFI_API_KEY,
+  // /api/lifi proxies the calls with the key kept server-side; otherwise the kit talks to li.quest.
+  let lifiApi = undefined;
+  const lifiReady = fetch("api/lifi-config").then((r) => r.json()).then((c) => { if (c && c.proxied) lifiApi = location.origin + c.base; }).catch(() => {});
+
   let kit = null;
   function boot() {
     const network = document.getElementById("net").value;
@@ -165,6 +170,7 @@
     kit = ArcBridgeKit.mount(document.getElementById("bridge"), {
       ethers: window.ethers,
       network,
+      lifiApi,
       getProvider: () => provider,
       defaultAmount: network === "testnet" ? "1" : "",
       destination,
@@ -180,8 +186,7 @@
     Object.keys(localStorage).filter((k) => k.startsWith("arcbridgekit:")).forEach((k) => localStorage.removeItem(k));
     boot();
   });
-  boot();
-  loadTokens("testnet");
+  lifiReady.then(() => { boot(); loadTokens("testnet"); });
 </script>
 </body>
 </html>
