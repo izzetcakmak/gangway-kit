@@ -81,6 +81,9 @@ A swap that went through while the page was closed is not lost: the transfer sho
 | `router` | `"auto"` \| `"cctp"` \| `"lifi"` | `"auto"` = LI.FI route into Arc when it exists, else swap+CCTP |
 | `slippage` | number | swap slippage fraction, default `0.005` |
 | `lifiApiKey` | string | optional LI.FI partner key (higher rate limits) |
+| `lifiIntegrator` | string | integrator string registered at portal.li.fi (default `"arc-bridge-kit"`) |
+| `lifiFee` | number | integrator fee on LI.FI swaps as a fraction, e.g. `0.0025` = 0.25%; paid to the integrator's fee wallet at execution, shown in the quote |
+| `feeLabel` | string | how the fee row names the recipient (default "this site") |
 | `feeHeadroom` | BigInt | `maxFee = quoted fee × headroom`, default `2n` (cap only, not charged) |
 | `onEvent` | `(evt) => void` | every step: `switching, planning, approving, approve_sent, approved, burning, burn_sent, burned, attesting, attested, forwarding, minted, stalled, error` |
 | `onMinted` | `(transfer) => void` | fired when USDC lands on Arc |
@@ -160,6 +163,14 @@ Two ways to use a key:
   the demo uses it automatically when the env var is set.
 
 Paying with USDC never touches LI.FI, so the bridge keeps working even while rate-limited.
+
+## Earning on the swap leg
+
+LI.FI lets an integrator take a cut of every swap it routes: pass `lifiIntegrator` (the string
+you registered at [portal.li.fi](https://portal.li.fi), with a fee wallet per chain) and
+`lifiFee` (a fraction, `0.0025` = 0.25%). LI.FI deducts it from the user's input and forwards
+it to your wallet when the swap executes; the widget shows it as its own row in the quote.
+CCTP has no revenue share, so the bridge leg stays fee-free.
 
 ## Mainnet note
 

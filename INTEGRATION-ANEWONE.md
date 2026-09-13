@@ -121,6 +121,10 @@ quotes ETH → USDC there), so the whole ETH → USDC → Arc → $NOAH chain ca
 When LI.FI opens routes into Arc, `router: "auto"` (default) turns the swap+bridge into one LI.FI
 transaction by itself.
 
+**Revenue on swaps.** Register the integrator `anewone` at portal.li.fi with the main wallet as
+fee wallet, then mount with `lifiIntegrator: "anewone", lifiFee: net === "mainnet" ? 0.0025 : 0`.
+0.25% of every non-USDC payment lands in that wallet on the source chain, per chain and token.
+
 **Rate limits are the one thing to set up.** Keyless LI.FI is ~200 requests / 2 h per visitor IP,
 which a launchpad page burns through fast. anewone is on Vercel, so copy `api/lifi/[...path].js`
 from the kit repo into anewone's `api/` folder, set `LIFI_API_KEY` in the Vercel project (key from
