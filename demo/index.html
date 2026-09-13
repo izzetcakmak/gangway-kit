@@ -64,7 +64,8 @@
           case "wallet_addEthereumChain": return null;
           case "net_version": return String(parseInt(chainId, 16));
           case "eth_sendTransaction": case "eth_sign": case "personal_sign": case "eth_signTypedData_v4":
-            throw new Error("mock provider cannot sign (" + method + ") — connect a real wallet to bridge");
+            // EIP-1193 shaped rejection (4001) so ethers surfaces it as ACTION_REJECTED
+            throw Object.assign(new Error("mock provider cannot sign (" + method + ") — connect a real wallet to bridge"), { code: 4001 });
           default: {
             const url = rpcFor(chainId);
             if (!url) throw new Error("mock: no RPC for chain " + chainId);
