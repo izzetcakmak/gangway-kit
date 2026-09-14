@@ -121,8 +121,10 @@ quotes ETH → USDC there), so the whole ETH → USDC → Arc → $NOAH chain ca
 When LI.FI opens routes into Arc, `router: "auto"` (default) turns the swap+bridge into one LI.FI
 transaction by itself.
 
-**Revenue on swaps.** Register the integrator `anewone` at portal.li.fi with the main wallet as
-fee wallet, then mount with `lifiIntegrator: "anewone", lifiFee: net === "mainnet" ? 0.0025 : 0`.
+**Revenue on swaps.** The portal.li.fi integration is "A New One", string `a-new-one`, 25 bps,
+fee wallet = the main wallet. Mount with `lifiIntegrator: "a-new-one", lifiFee: net === "mainnet" ? 0.0025 : 0`.
+The string must match the portal exactly; with a wrong one LI.FI refuses fee quotes and the kit
+silently falls back to fee-less swaps.
 0.25% of every non-USDC payment lands in that wallet on the source chain, per chain and token.
 
 **Rate limits are the one thing to set up.** Keyless LI.FI is ~200 requests / 2 h per visitor IP,
