@@ -55,8 +55,12 @@ depositForBurnWithHook(
                                                         lands at recipient
 ```
 
-The widget polls Iris for the attestation and then the recipient's USDC balance on Arc,
-which is the ground truth regardless of what the forwarder reports. With `router: "lifi"` (or
+The widget polls Iris for the attestation, then asks Arc itself whether the message nonce has
+been consumed (`MessageTransmitterV2.usedNonces`), which is the ground truth regardless of what
+the forwarder reports; Iris's `forwardState`/`destinationMintTxHash` and the recipient's balance are
+secondary signals. An RPC that does not answer counts as "unknown" and keeps the poll going:
+"late" is only declared once Arc has confirmed the nonce is still unused. The manual mint checks
+the same nonce first, so it never sends a `receiveMessage` that would only revert. With `router: "lifi"` (or
 `"auto"` once LI.FI lists Arc) the middle column is LI.FI's route and `/v1/status` is polled
 instead; the balance check on Arc stays.
 

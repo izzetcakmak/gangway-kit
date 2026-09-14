@@ -223,3 +223,30 @@ test("lifiFee / lifiIntegrator reach the LI.FI quote URL (mainnet-style 0.25%)",
   } finally { globalThis.fetch = realFetch; }
   assert.throws(() => new Kit.ArcBridge({ ethers: { getAddress: (a) => a }, lifiFee: 1.5 }), /fraction/);
 });
+
+test("nonceFromMessage reads bytes 12..44 of a CCTP V2 header", () => {
+  const { nonceFromMessage } = Kit.utils;
+  const nonce = "e2018fc7769f7366457350bca0e515c614733b25782f2276ad0c64aea628d58e";
+  const header = "00000001" + "00000006" + "0000001a" + nonce + "00".repeat(32 * 3 + 8) + "00".repeat(20);
+  assert.equal(nonceFromMessage("0x" + header), "0x" + nonce);
+  assert.equal(nonceFromMessage("0x1234"), null);
+  assert.equal(nonceFromMessage(null), null);
+});
+
+test("judgeMint: on-chain nonce beats everything, RPC silence is unknown, not pending", () => {
+  const { judgeMint } = Kit.utils;
+  assert.equal(judgeMint({ nonceUsed: 1n }), "minted");
+  assert.equal(judgeMint({ nonceUsed: 0n, irisForward: { state: "PENDING" } }), "pending");
+  // Iris says COMPLETE (its real casing) even if the balance baseline is useless
+  assert.equal(judgeMint({ nonceUsed: null, irisForward: { state: "COMPLETE", txHash: "0xabc" } }), "minted");
+  assert.equal(judgeMint({ nonceUsed: null, irisForward: { state: "complete" } }), "minted");
+  // a destination tx hash alone is proof
+  assert.equal(judgeMint({ nonceUsed: null, irisForward: { state: null, txHash: "0xabc" } }), "minted");
+  // balance delta counts only when the baseline predates the attestation
+  assert.equal(judgeMint({ nonceUsed: null, balance: { now: 200n, start: 100n, baselineBeforeAttest: true } }), "minted");
+  assert.equal(judgeMint({ nonceUsed: null, balance: { now: 200n, start: 200n, baselineBeforeAttest: false } }), "pending");
+  assert.equal(judgeMint({ nonceUsed: null, balance: { now: 300n, start: 300n, baselineBeforeAttest: false } }), "pending");
+  // nothing readable this round: unknown (keep polling, never "late")
+  assert.equal(judgeMint({ nonceUsed: null, irisForward: null, balance: { now: null, start: 100n } }), "unknown");
+  assert.equal(judgeMint({}), "unknown");
+});
