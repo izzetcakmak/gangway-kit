@@ -250,3 +250,30 @@ test("judgeMint: on-chain nonce beats everything, RPC silence is unknown, not pe
   assert.equal(judgeMint({ nonceUsed: null, irisForward: null, balance: { now: null, start: 100n } }), "unknown");
   assert.equal(judgeMint({}), "unknown");
 });
+
+test("LI.FI refusing the integrator fee does not kill the swap: retry without fee, remember, notify", async () => {
+  const seen = []; let refusedMsg = null;
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    seen.push(String(url));
+    const u = new URL(String(url));
+    if (u.searchParams.has("fee")) return { ok: false, json: async () => ({ message: 'Integrator "anewone" is not configured for collecting fees. Please sign up on https://portal.li.fi/ and configure your fee wallet.', code: 1011 }) };
+    return { ok: true, json: async () => ({ tool: "x", type: "lifi", estimate: { toAmount: "100", toAmountMin: "99", approvalAddress: null, executionDuration: 1, gasCosts: [], feeCosts: [] }, transactionRequest: { to: "0x1231DEB6f5749EF6cE6943a275A1D3E7486F4EaE", data: "0x00", value: "0x0" } }) };
+  };
+  try {
+    const b = new Kit.ArcBridge({ ethers: { getAddress: (a) => a }, network: "mainnet", storage: { get: () => null, set() {} },
+      lifiIntegrator: "anewone", lifiFee: 0.0025, onLifiFeeRefused: (m) => { refusedMsg = m; } });
+    assert.equal(b.lifiFeeActive, true);
+    const q = await b.lifiQuote({ fromChain: 8453, toChain: 8453, fromToken: Kit.NATIVE, toToken: Kit.SOURCES.mainnet[0].usdc, fromAmount: 10n ** 16n });
+    assert.equal(q.available, true, "the swap quote must survive the refused fee");
+    assert.equal(seen.length, 2);
+    assert.equal(new URL(seen[0]).searchParams.get("fee"), "0.0025");
+    assert.equal(new URL(seen[1]).searchParams.get("fee"), null);
+    assert.match(refusedMsg, /not configured/);
+    assert.equal(b.lifiFeeActive, false);
+    // the next quote goes straight out without the fee (one call, no second refusal)
+    await b.lifiQuote({ fromChain: 8453, toChain: 8453, fromToken: Kit.NATIVE, toToken: Kit.SOURCES.mainnet[0].usdc, fromAmount: 2n * 10n ** 16n });
+    assert.equal(seen.length, 3);
+    assert.equal(new URL(seen[2]).searchParams.get("fee"), null);
+  } finally { globalThis.fetch = realFetch; }
+});

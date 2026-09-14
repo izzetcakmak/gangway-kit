@@ -1,6 +1,6 @@
 {
   "name": "arc-bridge-kit",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Drop-in 'bridge USDC to Arc' widget + headless engine on Circle CCTP V2 with the Forwarding Service (no gas needed on Arc).",
   "main": "arc-bridge-kit.js",
   "browser": "arc-bridge-kit.js",
