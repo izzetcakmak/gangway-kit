@@ -61,8 +61,9 @@ the forwarder reports; Iris's `forwardState`/`destinationMintTxHash` and the rec
 secondary signals. An RPC that does not answer counts as "unknown" and keeps the poll going:
 "late" is only declared once Arc has confirmed the nonce is still unused. The manual mint checks
 the same nonce first, so it never sends a `receiveMessage` that would only revert. With `router: "lifi"` (or
-`"auto"` once LI.FI lists Arc) the middle column is LI.FI's route and `/v1/status` is polled
-instead; the balance check on Arc stays.
+`"auto"` when it wins the comparison) the middle column is LI.FI's route: `/v1/status` is polled
+and, because these routes are CCTP underneath, Circle's attestation and Arc's nonce are checked
+too, so a late third-party executor can be replaced by the user's own mint (Mint on Arc).
 
 A swap that went through while the page was closed is not lost: the transfer shows up as
 `swapped` in the in-flight list with a **Bridge now** button (`core.continueBridge`).
@@ -82,7 +83,7 @@ A swap that went through while the page was closed is not lost: the transfer sho
 | `defaultSource`, `defaultAmount` | | pre-fill |
 | `minAmount` | BigInt minor units | default 1 USDC |
 | `payWith` | `"any"` \| `"usdc"` | `"any"` shows the LI.FI shortlist (native, USDC, WETH, USDT, DAI, cbBTC, ...); `"usdc"` hides the swap leg |
-| `router` | `"auto"` \| `"cctp"` \| `"lifi"` | `"auto"` = LI.FI route into Arc when it exists, else swap+CCTP |
+| `router` | `"auto"` \| `"cctp"` \| `"lifi"` | `"auto"` prices both and takes LI.FI's route into Arc only when it lands at least as much USDC (within 0.1%) and is no slower than 1.5× CCTP; otherwise swap+CCTP. `"cctp"` pins the house path |
 | `slippage` | number | swap slippage fraction, default `0.005` |
 | `lifiApiKey` | string | optional LI.FI partner key (higher rate limits) |
 | `lifiIntegrator` | string | integrator string registered at portal.li.fi (default `"arc-bridge-kit"`) |

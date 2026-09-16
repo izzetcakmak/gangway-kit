@@ -277,3 +277,16 @@ test("LI.FI refusing the integrator fee does not kill the swap: retry without fe
     assert.equal(new URL(seen[2]).searchParams.get("fee"), null);
   } finally { globalThis.fetch = realFetch; }
 });
+
+test("chooseRoute: LI.FI must beat CCTP on both landing amount and time", () => {
+  const { chooseRoute } = Kit.utils;
+  const cctp = { available: true, expectedReceive: 19_930_000n, estSeconds: 20 };
+  assert.equal(chooseRoute(cctp, { available: true, expectedReceive: 17_955_000n, estSeconds: 60 }), "cctp");   // launch night: 10% less
+  assert.equal(chooseRoute(cctp, { available: true, expectedReceive: 19_990_000n, estSeconds: 1500 }), "cctp"); // more, but 25 min
+  assert.equal(chooseRoute(cctp, { available: true, expectedReceive: 19_990_000n, estSeconds: 25 }), "lifi");   // more and as fast
+  assert.equal(chooseRoute(cctp, { available: true, expectedReceive: 19_915_000n, estSeconds: 10 }), "lifi");   // within 0.1%, faster
+  assert.equal(chooseRoute(cctp, { available: true, expectedReceive: 19_900_000n, estSeconds: 10 }), "cctp");   // 0.15% less: no
+  assert.equal(chooseRoute(cctp, null), "cctp");
+  assert.equal(chooseRoute(null, { available: true, expectedReceive: 1n, estSeconds: 999 }), "lifi");           // CCTP cannot serve: take what exists
+  assert.equal(chooseRoute({ available: false }, { available: false }), "cctp");
+});
