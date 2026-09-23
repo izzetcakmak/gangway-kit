@@ -1,6 +1,6 @@
 {
   "name": "gangway-kit",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "GangWay Kit — drop-in 'bridge USDC to Arc' widget + headless engine on Circle CCTP V2 with the Forwarding Service (no gas needed on Arc).",
   "main": "gangway-kit.js",
   "browser": "gangway-kit.js",
