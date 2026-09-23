@@ -9,7 +9,7 @@
 //   node test/preflight.mjs mainnet --lifi  # also ask LI.FI per chain (costs ~2 keyless requests each)
 import { createRequire } from "node:module";
 const require = createRequire(import.meta.url);
-const Kit = require("../arc-bridge-kit.js");
+const Kit = require("../gangway-kit.js");
 const { jsonRpc, fetchJson, computeFees } = Kit.utils;
 
 const network = process.argv[2] === "mainnet" ? "mainnet" : "testnet";
@@ -21,7 +21,7 @@ const pad = (n) => BigInt(n).toString(16).padStart(64, "0");
 let failures = 0;
 const ok = (cond, label) => { console.log((cond ? "  ok   " : "  FAIL ") + label); if (!cond) failures++; };
 
-console.log(`== arc-bridge-kit preflight (${network}) ==`);
+console.log(`== gangway-kit preflight (${network}) ==`);
 
 // Arc itself
 const arc = Kit.ARC[network];

@@ -1,4 +1,6 @@
-# arc-bridge-kit
+# GangWay Kit
+
+`gangway-kit` on npm-style installs; the browser global is `GangWayKit` (and `ArcBridgeKit`, its first name, still works). Formerly published as arc-bridge-kit.
 
 Drop-in **"pay with anything, land USDC on Arc, then buy"** widget and headless engine.
 Swaps by **LI.FI**, bridging by **Circle CCTP V2 + Forwarding Service**, an optional last leg on Arc.
@@ -28,7 +30,7 @@ Every contract address, domain ID and RPC in the kit is verified live by `npm ru
 
 ```html
 <script src="vendor/ethers.umd.min.js"></script>
-<script src="arc-bridge-kit.js"></script>
+<script src="gangway-kit.js"></script>
 <div id="bridge"></div>
 <script>
   const kit = ArcBridgeKit.mount(document.getElementById("bridge"), {
@@ -89,7 +91,7 @@ A swap that went through while the page was closed is not lost: the transfer sho
 | `router` | `"auto"` \| `"cctp"` \| `"lifi"` | `"auto"` prices both and takes LI.FI's route into Arc only when it lands at least as much USDC (within 0.1%) and is no slower than 1.5× CCTP; otherwise swap+CCTP. `"cctp"` pins the house path |
 | `slippage` | number | swap slippage fraction, default `0.005` |
 | `lifiApiKey` | string | optional LI.FI partner key (higher rate limits) |
-| `lifiIntegrator` | string | integrator string registered at portal.li.fi (default `"arc-bridge-kit"`) |
+| `lifiIntegrator` | string | integrator string registered at portal.li.fi (default `"arc-bridge-kit"`, the kit's first name) |
 | `lifiFee` | number | integrator fee on LI.FI swaps as a fraction, e.g. `0.0025` = 0.25%; paid to the integrator's fee wallet at execution, shown in the quote |
 | `feeLabel` | string | how the fee row names the recipient (default "this site") |
 | `feeHeadroom` | BigInt | `maxFee = quoted fee × headroom`, default `2n` (cap only, not charged) |

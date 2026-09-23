@@ -1,4 +1,4 @@
-# Integrating arc-bridge-kit into anewone.xyz
+# Integrating gangway-kit into anewone.xyz
 
 anewone's frontend is a static `docs/index.html` with `vendor/ethers.umd.min.js`, `config.js`
 (`window.ANEWONE_CONFIG`) and a Web3Auth "Continue with Google" wallet. The kit was built to
@@ -7,17 +7,17 @@ slot into exactly that.
 ## 1. Files
 
 ```
-cp arc-bridge-kit.js  <anewone>/docs/vendor/arc-bridge-kit.js
+cp gangway-kit.js  <anewone>/docs/vendor/gangway-kit.js
 ```
 
-Add to `PROVENANCE.md` in vendor: `arc-bridge-kit.js — github.com/izzetcakmak/arc-bridge-kit vX.Y.Z`.
+Add to `PROVENANCE.md` in vendor: `gangway-kit.js — github.com/izzetcakmak/gangway-kit vX.Y.Z`.
 
 ## 2. Load it (after ethers and config.js)
 
 ```html
 <script src="vendor/ethers.umd.min.js"></script>
 <script src="config.js"></script>
-<script src="vendor/arc-bridge-kit.js"></script>
+<script src="vendor/gangway-kit.js"></script>
 ```
 
 ## 3. Mount

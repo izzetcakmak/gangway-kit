@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
-const Kit = require("../arc-bridge-kit.js");
+const Kit = require("../gangway-kit.js");
 const { parseUsdc, formatUsdc, toBytes32Address, computeFees, isAddress } = Kit.utils;
 
 test("constants match Circle's published CCTP V2 values", () => {
@@ -220,7 +220,7 @@ test("lifiFee / lifiIntegrator reach the LI.FI quote URL (mainnet-style 0.25%)",
     const b0 = new Kit.ArcBridge({ ethers: { getAddress: (a) => a }, network: "testnet", storage: { get: () => null, set() {} } });
     await b0.lifiQuote({ fromChain: 84532, toChain: 84532, fromToken: Kit.NATIVE, toToken: Kit.SOURCES.testnet[0].usdc, fromAmount: 10n ** 15n, fromAddress: null });
     assert.equal(new URL(seen[1]).searchParams.get("fee"), null);
-    assert.equal(new URL(seen[1]).searchParams.get("integrator"), "arc-bridge-kit");
+    assert.equal(new URL(seen[1]).searchParams.get("integrator"), "gangway-kit");
   } finally { globalThis.fetch = realFetch; }
   assert.throws(() => new Kit.ArcBridge({ ethers: { getAddress: (a) => a }, lifiFee: 1.5 }), /fraction/);
 });
