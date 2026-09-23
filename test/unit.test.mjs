@@ -28,7 +28,8 @@ test("source chain tables are internally consistent", () => {
       assert.ok(!seenKey.has(c.key), `dup key ${c.key}`); seenKey.add(c.key);
       assert.ok(!seenId.has(c.chainId), `dup chainId ${c.chainId}`); seenId.add(c.chainId);
       assert.ok(!seenDomain.has(c.domain), `dup domain ${c.domain}`); seenDomain.add(c.domain);
-      assert.ok(isAddress(c.usdc), `${c.key} usdc`);
+      if (c.vm === "svm") assert.ok(Kit.utils.isSolAddress(c.usdc), `${c.key} usdc mint`);
+      else assert.ok(isAddress(c.usdc), `${c.key} usdc`);
       assert.ok(c.rpcs.length >= 1, `${c.key} needs a read RPC`);
       assert.ok(c.explorer.startsWith("https://"), `${c.key} explorer`);
       assert.notEqual(c.domain, 26, "a source can never be Arc itself");
@@ -289,4 +290,119 @@ test("chooseRoute: LI.FI must beat CCTP on both landing amount and time", () => 
   assert.equal(chooseRoute(cctp, null), "cctp");
   assert.equal(chooseRoute(null, { available: true, expectedReceive: 1n, estSeconds: 999 }), "lifi");           // CCTP cannot serve: take what exists
   assert.equal(chooseRoute({ available: false }, { available: false }), "cctp");
+});
+
+// ---- Solana
+
+test("Solana source: shape, helpers, base58", () => {
+  const { isSolAddress, isSvm, base58Encode, b64ToBytes, bytesToB64, toSvmTx } = Kit.utils;
+  const sol = Kit.SOURCES.mainnet.find((c) => c.key === "solana");
+  assert.ok(sol, "solana is a mainnet source");
+  assert.equal(isSvm(sol), true);
+  assert.equal(sol.chainId, Kit.SOL_LIFI_CHAIN_ID);
+  assert.equal(sol.domain, 5, "CCTP's Solana domain");
+  assert.equal(sol.native.decimals, 9);
+  assert.ok(isSolAddress(sol.usdc));
+  assert.ok(isSolAddress(Kit.SOL_NATIVE));
+  assert.equal(isSolAddress("0xD4F1254C803662c46D9c21f80F4F3c15FF57e2c9"), false);
+  assert.equal(isSolAddress("0OIl"), false, "base58 has no 0, O, I, l");
+  assert.equal(isSvm(Kit.SOURCES.mainnet[0]), false);
+  // bs58's own README example, and leading zero bytes become leading 1s
+  assert.equal(base58Encode(new TextEncoder().encode("hello")), "Cn8eVZg");
+  assert.equal(base58Encode(Uint8Array.from([0, 0, 1])), "112");
+  assert.equal(base58Encode(Uint8Array.from([0, 0])), "11");
+  const bytes = Uint8Array.from([1, 2, 3, 250, 251]);
+  assert.deepEqual([...b64ToBytes(bytesToB64(bytes))], [...bytes]);
+  assert.deepEqual(toSvmTx({ data: "AQID" }), { data: "AQID" });
+  assert.throws(() => toSvmTx({}));
+  assert.throws(() => toSvmTx(null));
+});
+
+test("payShortlist on Solana: SOL first, USDC second, Solana's own symbol list, exact-case matching", () => {
+  const { payShortlist } = Kit.utils;
+  const sol = Kit.SOURCES.mainnet.find((c) => c.key === "solana");
+  const tokens = [
+    { address: Kit.SOL_NATIVE, symbol: "SOL", name: "SOL", decimals: 9 },
+    { address: sol.usdc, symbol: "USDC", name: "USD Coin", decimals: 6 },
+    { address: "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263", symbol: "BONK", name: "Bonk", decimals: 5 },
+    { address: "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB", symbol: "USDT", name: "Tether", decimals: 6 },
+    { address: "4200000000000000000000000000000000000006zzzz", symbol: "WETH", name: "not on this list", decimals: 18 },
+  ];
+  const out = payShortlist(tokens, sol);
+  // BONK and WIF are guaranteed by the kit's own known-mint list: LI.FI's entry wins when it
+  // has one under the symbol (BONK here, listed once, not twice), the kit's fills in otherwise (WIF)
+  assert.deepEqual(out.map((t) => t.symbol), ["SOL", "USDC", "USDT", "BONK", "WIF"]);
+  assert.equal(out[3].decimals, 5);
+  assert.equal(out[4].address, "EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm");
+  // WETH is on the EVM list only: an EVM chain still gets it, Solana never does
+  assert.deepEqual(payShortlist(null, sol).map((t) => t.symbol), ["SOL", "USDC", "BONK", "WIF"]);
+  assert.equal(payShortlist(null, sol)[0].address, Kit.SOL_NATIVE);
+});
+
+test("explainLifi never tells a Solana user to 'bridge over CCTP'", () => {
+  const { explainLifi } = Kit.utils;
+  const sol = Kit.SOURCES.mainnet.find((c) => c.key === "solana");
+  for (const reason of ["No available quotes for the requested transfer", "Could not find token", "something else"]) {
+    const m = explainLifi(reason, sol, "mainnet");
+    assert.doesNotMatch(m, /CCTP/);
+    assert.match(m, /Solana/);
+  }
+});
+
+test("plan() on Solana is one LI.FI route even with router 'cctp', quoted for the connected account", async () => {
+  const mem = new Map();
+  const b = new Kit.ArcBridge({ ethers: { getAddress: (a) => a }, network: "mainnet", router: "cctp",
+    storage: { get: (k) => mem.get(k) ?? null, set: (k, v) => mem.set(k, v) } });
+  const sol = b.source("solana");
+  const seen = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    seen.push(String(url));
+    return { ok: true, json: async () => ({ tool: "relaydepository", type: "lifi",
+      estimate: { toAmount: "11327819", toAmountMin: "11271180", executionDuration: 1, gasCosts: [], feeCosts: [] },
+      transactionRequest: { data: "AQID" } }) };
+  };
+  try {
+    const p = await b.plan({ source: sol, payToken: Kit.SOL_NATIVE, fromAmount: 100_000_000n,
+      fromAddress: "DRpbCBMxVnDK7maPM5tGv6MvB3v1sRMC86PZ8okm21hy", recipient: "0xD4F1254C803662c46D9c21f80F4F3c15FF57e2c9" });
+    assert.equal(p.available, true);
+    assert.equal(p.router, "lifi");
+    assert.equal(p.expectedReceive, 11_327_819n);
+    assert.equal(p.minReceive, 11_271_180n);
+    assert.deepEqual(p.lifi.tx, { data: "AQID" });
+    assert.equal(seen.length, 1, "one LI.FI call, no Iris fee quote, no same-chain swap");
+    const u = new URL(seen[0]);
+    assert.equal(u.searchParams.get("fromChain"), String(Kit.SOL_LIFI_CHAIN_ID));
+    assert.equal(u.searchParams.get("toChain"), "5042");
+    assert.equal(u.searchParams.get("fromAddress"), "DRpbCBMxVnDK7maPM5tGv6MvB3v1sRMC86PZ8okm21hy", "base58 sender passes through untouched");
+    assert.equal(u.searchParams.get("toAddress"), "0xd4f1254c803662c46d9c21f80f4f3c15ff57e2c9");
+    // no wallet yet: a placeholder pubkey is quoted for, a burn address receives, nothing is ever sent
+    await b.plan({ source: sol, payToken: Kit.SOL_NATIVE, fromAmount: 100_000_000n });
+    const u2 = new URL(seen[1]);
+    assert.match(u2.searchParams.get("fromAddress"), /^[1-9A-HJ-NP-Za-km-z]{32,44}$/);
+    assert.equal(u2.searchParams.get("toAddress"), "0x000000000000000000000000000000000000dead");
+  } finally { globalThis.fetch = realFetch; }
+  // a Solana wallet is required to send; nothing was connected
+  await assert.rejects(() => b.bridge({ source: sol, amount: 1n, recipient: "0xD4F1254C803662c46D9c21f80F4F3c15FF57e2c9" }), /Connect a Solana wallet/);
+  assert.equal(b.solanaAccount(), null);
+});
+
+test("Solana balances: lamports for SOL, summed token accounts for a mint, null for a bad owner", async () => {
+  const b = new Kit.ArcBridge({ ethers: { getAddress: (a) => a }, network: "mainnet", storage: { get: () => null, set() {} } });
+  const sol = b.source("solana");
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    const req = JSON.parse(init.body);
+    if (req.method === "getBalance") return { ok: true, json: async () => ({ jsonrpc: "2.0", id: 1, result: { context: { slot: 1 }, value: 123456789 } }) };
+    if (req.method === "getTokenAccountsByOwner") return { ok: true, json: async () => ({ jsonrpc: "2.0", id: 1, result: { context: { slot: 1 }, value: [
+      { account: { data: { parsed: { info: { tokenAmount: { amount: "1000000" } } } } } },
+      { account: { data: { parsed: { info: { tokenAmount: { amount: "250000" } } } } } },
+    ] } }) };
+    return { ok: false, json: async () => null };
+  };
+  try {
+    assert.equal(await b.tokenBalance(sol, Kit.SOL_NATIVE, "DRpbCBMxVnDK7maPM5tGv6MvB3v1sRMC86PZ8okm21hy"), 123456789n);
+    assert.equal(await b.usdcBalance(sol, "DRpbCBMxVnDK7maPM5tGv6MvB3v1sRMC86PZ8okm21hy"), 1_250_000n);
+    assert.equal(await b.tokenBalance(sol, Kit.SOL_NATIVE, "0xD4F1254C803662c46D9c21f80F4F3c15FF57e2c9"), null, "an EVM address is not a Solana owner");
+  } finally { globalThis.fetch = realFetch; }
 });

@@ -11,8 +11,11 @@ Swaps by **LI.FI**, bridging by **Circle CCTP V2 + Forwarding Service**, an opti
   quote; the day LI.FI opens Arc, any-token → USDC-on-Arc becomes one LI.FI transaction and CCTP
   stays as the fallback. Nothing to redeploy.
 - **Fast Transfer** (~20 s) or **Standard** (no protocol fee, source-chain finality).
-- **14 mainnet / 13 testnet source chains**: Base, Ethereum, Arbitrum, OP, Polygon, Avalanche,
-  Unichain, Linea, World Chain, Sonic, Monad, Sei, HyperEVM, Ink (+ their testnets).
+- **15 mainnet / 13 testnet source chains**: Base, Ethereum, Arbitrum, OP, Polygon, Avalanche,
+  Unichain, Linea, World Chain, Sonic, Monad, Sei, HyperEVM, Ink (+ their testnets), and **Solana**.
+- **Solana, no Solana library**: SOL or any Solana token becomes USDC on Arc in one LI.FI route
+  (Relay underneath; ~1 s). The user's Wallet Standard wallet (Phantom, Solflare, Backpack…) signs
+  the bytes LI.FI returns, so nothing from `@solana/*` is bundled. See "Solana" below.
 - **Resumable**: in-flight transfers survive a page refresh; if the forwarder is late the
   attested message can be minted manually from the user's wallet.
 - **Zero dependencies** besides ethers v6, which you already load. One file, ~30 KB, classic
@@ -92,9 +95,30 @@ A swap that went through while the page was closed is not lost: the transfer sho
 | `feeHeadroom` | BigInt | `maxFee = quoted fee × headroom`, default `2n` (cap only, not charged) |
 | `onEvent` | `(evt) => void` | every step: `switching, planning, approving, approve_sent, approved, burning, burn_sent, burned, attesting, attested, forwarding, minted, stalled, error` |
 | `onMinted` | `(transfer) => void` | fired when USDC lands on Arc |
+| `solanaWallet` | Wallet Standard wallet \| `() => wallet` | which wallet signs on Solana; by default the wallets installed in the browser are discovered |
 | `title` | string | header text |
 
-Returned handle: `{ core, account, setAccount(a), setSource(key), setAmount(v), refresh(), destroy() }`.
+Returned handle: `{ core, account, solanaAccount, setAccount(a), setSource(key), setAmount(v), refresh(), destroy() }`.
+
+## Solana
+
+Solana is a source like any other in the list, with three differences:
+
+- **One route, always LI.FI.** There is no CCTP leg on Solana in this kit (Circle's program there
+  is not the EVM contracts the kit talks to). Whatever `router` says, a payment from Solana is a
+  single LI.FI route into Arc; verified live on 23 Sep 2026, LI.FI routes it over Relay in about
+  a second: 0.1 SOL → ~11.3 USDC, 1M BONK → ~3.4 USDC, USDC → USDC at ~0.5%.
+- **The Solana wallet signs.** The widget discovers Wallet Standard wallets (`wallet-standard:*`
+  events), reconnects silently one that already trusts the site, and signs the serialized
+  transaction LI.FI returns with `solana:signAndSendTransaction` (falling back to
+  `solana:signTransaction` + `sendTransaction` over RPC). No Solana dependency ships.
+- **The USDC lands at an EVM address.** The recipient is the connected EVM account, or the
+  address typed into "send to another address". Phantom carries both an EVM and a Solana account,
+  so a Phantom user needs nothing else; a Solana-only wallet needs an Arc address typed in.
+
+Headless: `await core.connectSolana()` (or `connectSolana(wallet, { silent: true })`), then
+`core.bridge({ source: "solana", payToken: Kit.SOL_NATIVE, amount, recipient })` and `track()` as
+usual. Balances: `core.tokenBalance("solana", mintOrSOL_NATIVE, base58Owner)`.
 
 ## Bridge → swap on Arc (`destination`)
 
@@ -179,10 +203,9 @@ CCTP has no revenue share, so the bridge leg stays fee-free.
 
 ## Mainnet note
 
-Arc mainnet (chain 5042, USDC `0x3600…0000`) is already registered as CCTP domain 26 on
-every source chain and Circle quotes forwarded routes to it today. The kit ships without
-Arc mainnet RPC/explorer URLs because none were public at the time of writing; pass them via
-`arcRpcs` / `arcExplorer` (or edit `ARC.mainnet`) when they are.
+Arc mainnet (chain 5042, USDC `0x3600…0000`) went live on 16 Sep 2026 and is registered as
+CCTP domain 26 on every EVM source chain; Circle quotes forwarded routes to it. The kit's
+default Arc read RPC is `arc.drpc.org`; pass your own pool via `arcRpcs` / `arcExplorer`.
 
 ## Safety properties
 

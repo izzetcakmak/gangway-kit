@@ -42,6 +42,22 @@ if (arc.rpcs.length) {
 
 for (const c of Kit.SOURCES[network]) {
   console.log(`\n${c.name} (chainId ${c.chainId}, domain ${c.domain})`);
+  if (c.vm === "svm") {
+    // Solana: its RPC answers, the USDC mint exists, and LI.FI routes SOL into Arc (the one
+    // path this source has; there is no CCTP leg for it in the kit)
+    let ver = null, mint = null, live = null;
+    for (const u of c.rpcs) {
+      ver ??= await jsonRpc(u, "getVersion");
+      if (ver && !live) live = u;
+      mint ??= await jsonRpc(u, "getAccountInfo", [c.usdc, { encoding: "jsonParsed" }]);
+    }
+    ok(ver && ver["solana-core"], `rpc answers: solana-core ${ver ? ver["solana-core"] : "no answer"}${live ? " via " + live : ""}`);
+    const info = mint && mint.value && mint.value.data && mint.value.data.parsed && mint.value.data.parsed.info;
+    ok(info && Number(info.decimals) === 6, `USDC mint ${c.usdc} decimals = ${info ? info.decimals : "n/a"}`);
+    const route = await core.plan({ source: c, payToken: Kit.SOL_NATIVE, fromAmount: 10n ** 8n });
+    ok(route.available, route.available ? `LI.FI routes 0.1 SOL into Arc via ${route.lifi.tool}: ≈ ${route.expectedReceive} minor USDC in ~${route.estSeconds} s` : "LI.FI has no route from Solana into Arc: " + route.reason);
+    continue;
+  }
   let id = null, dec = null, remote = null, live = null;
   for (const u of c.rpcs) {
     id ??= await jsonRpc(u, "eth_chainId");
