@@ -220,7 +220,7 @@ test("lifiFee / lifiIntegrator reach the LI.FI quote URL (mainnet-style 0.25%)",
     const b0 = new Kit.ArcBridge({ ethers: { getAddress: (a) => a }, network: "testnet", storage: { get: () => null, set() {} } });
     await b0.lifiQuote({ fromChain: 84532, toChain: 84532, fromToken: Kit.NATIVE, toToken: Kit.SOURCES.testnet[0].usdc, fromAmount: 10n ** 15n, fromAddress: null });
     assert.equal(new URL(seen[1]).searchParams.get("fee"), null);
-    assert.equal(new URL(seen[1]).searchParams.get("integrator"), "gangway-kit");
+    assert.equal(new URL(seen[1]).searchParams.get("integrator"), "arc-bridge-kit"); // the portal.li.fi registration keeps the kit's first name
   } finally { globalThis.fetch = realFetch; }
   assert.throws(() => new Kit.ArcBridge({ ethers: { getAddress: (a) => a }, lifiFee: 1.5 }), /fraction/);
 });
