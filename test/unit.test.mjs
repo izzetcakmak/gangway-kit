@@ -89,6 +89,35 @@ test("computeFees: standard tier has no protocol fee", () => {
   assert.equal(q.expectedFee, 20313n);
 });
 
+test("computeFees: headroom 1n makes the cap equal the expected fee, so what is shown is what lands", () => {
+  // Circle's Forwarding Service takes the whole maxFee (feeExecuted == maxFee on every forwarded transfer read on 10 Oct 2026)
+  const q = computeFees(FEES, 10_000_000n, "fast", 1n);
+  assert.equal(q.maxFee, q.expectedFee);
+  assert.equal(q.maxFee, 20638n);
+  assert.equal(q.expectedReceive, q.minReceive);
+  assert.equal(q.expectedReceive, 9_979_362n);
+  const s = computeFees(FEES, 10_000_000n, "standard", 1n);
+  assert.equal(s.maxFee, 20313n);
+  assert.equal(s.expectedReceive, 9_979_687n);
+});
+
+test("feeHeadroom reaches quote(): the engine's maxFee follows the option, the default is unchanged", async () => {
+  const mk = (extra) => new Kit.ArcBridge({ ethers: { getAddress: (a) => a }, network: "mainnet", storage: { get: () => null, set() {} }, ...extra });
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({ ok: true, json: async () => FEES });
+  try {
+    const dflt = await mk({}).quote("base", 10_000_000n, "fast");
+    assert.equal(dflt.maxFee, 41276n, "the default is still 2x");
+    const exact = await mk({ feeHeadroom: 1n }).quote("base", 10_000_000n, "fast");
+    assert.equal(exact.maxFee, 20638n);
+    assert.equal(exact.expectedReceive, 9_979_362n);
+    assert.equal(exact.minReceive, exact.expectedReceive);
+    const sui = await mk({ feeHeadroom: 1n }).quote("sui", 10_000_000n, "fast");   // Sui has no fast tier: standard, no protocol fee
+    assert.equal(sui.minFinalityThreshold, 2000);
+    assert.equal(sui.maxFee, 20313n);
+  } finally { globalThis.fetch = realFetch; }
+});
+
 test("computeFees: null when the route is not forwarded or the response is junk", () => {
   assert.equal(computeFees(null, 1n), null);
   assert.equal(computeFees([], 1n), null);

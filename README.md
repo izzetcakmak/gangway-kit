@@ -98,7 +98,7 @@ A swap that went through while the page was closed is not lost: the transfer sho
 | `lifiIntegrator` | string | integrator string registered at portal.li.fi (default `"arc-bridge-kit"`, the kit's first name) |
 | `lifiFee` | number | integrator fee on LI.FI swaps as a fraction, e.g. `0.0025` = 0.25%; paid to the integrator's fee wallet at execution, shown in the quote |
 | `feeLabel` | string | how the fee row names the recipient (default "this site") |
-| `feeHeadroom` | BigInt | `maxFee = quoted fee × headroom`, default `2n` (cap only, not charged) |
+| `feeHeadroom` | BigInt | `maxFee = quoted fee × headroom`, default `2n`. Circle's Forwarding Service takes the **whole** `maxFee` (25 of 25 real forwarded transfers read on 10 Oct 2026 had `feeExecuted == maxFee`, and its docs say excess gas is not refunded), so the headroom is a cost the user pays and "you receive" is overstated by it. Pass `1n` for an exact figure; the quote's `high` level is already at or above the `med` that Circle's own how-to burns with. The default stays `2n` for compatibility. |
 | `onEvent` | `(evt) => void` | every step: `switching, planning, approving, approve_sent, approved, burning, burn_sent, burned, attesting, attested, forwarding, minted, stalled, error` |
 | `onMinted` | `(transfer) => void` | fired when USDC lands on Arc |
 | `solanaWallet` | Wallet Standard wallet \| `() => wallet` | which wallet signs on Solana; by default the wallets installed in the browser are discovered |
