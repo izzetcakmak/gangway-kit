@@ -1,0 +1,1056 @@
+{
+ "generatedWith": "@mysten/sui 2.35.0",
+ "note": "regenerate with test/sui-parity.mjs --write after upgrading the SDK; the kit must keep matching this output",
+ "sender": "0x5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e",
+ "mintRecipient": "0x0000000000000000000000009ffb87dc69eeeab8f1cbb8646de6a7f69a284da6",
+ "maxFee": "35600",
+ "cases": [
+  {
+   "name": "one coin covers the amount: split it",
+   "input": {
+    "coins": [
+     {
+      "id": "0xa1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+      "balance": "5000000"
+     },
+     {
+      "id": "0xb2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+      "balance": "1000000"
+     }
+    ],
+    "addressBalance": "0",
+    "amount": "3000000"
+   },
+   "expected": {
+    "version": 2,
+    "sender": "0x5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e",
+    "expiration": null,
+    "gasData": {
+     "budget": null,
+     "price": null,
+     "owner": null,
+     "payment": null
+    },
+    "inputs": [
+     {
+      "UnresolvedObject": {
+       "objectId": "0xa1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+      }
+     },
+     {
+      "Pure": {
+       "bytes": "wMYtAAAAAAA="
+      }
+     },
+     {
+      "Pure": {
+       "bytes": "GgAAAA=="
+      }
+     },
+     {
+      "Pure": {
+       "bytes": "AAAAAAAAAAAAAAAAn/uH3Gnu6rjxy7hkbean9pooTaY="
+      }
+     },
+     {
+      "Pure": {
+       "bytes": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+      }
+     },
+     {
+      "Pure": {
+       "bytes": "EIsAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+      }
+     },
+     {
+      "Pure": {
+       "bytes": "0AcAAA=="
+      }
+     },
+     {
+      "Pure": {
+       "bytes": "IGNjdHAtZm9yd2FyZAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+      }
+     },
+     {
+      "UnresolvedObject": {
+       "objectId": "0x06fb166941cd7bc095edc019d054a753ec3f1e4c25f28f2ecc4a6cfa0a9b1167"
+      }
+     },
+     {
+      "UnresolvedObject": {
+       "objectId": "0xa32de8a6dd0178fb05f662929d55cddb69a25c26bde4b83f89e36d17ead94c41"
+      }
+     },
+     {
+      "UnresolvedObject": {
+       "objectId": "0x0000000000000000000000000000000000000000000000000000000000000403"
+      }
+     },
+     {
+      "UnresolvedObject": {
+       "objectId": "0x57d6725e7a8b49a7b2a612f6bd66ab5f39fc95332ca48be421c3229d514a6de7"
+      }
+     },
+     {
+      "UnresolvedObject": {
+       "objectId": "0x0c067f7d325e5b60e3179712e7783534ba1556cbb3d359d8161497e37689230c"
+      }
+     }
+    ],
+    "commands": [
+     {
+      "SplitCoins": {
+       "coin": {
+        "Input": 0
+       },
+       "amounts": [
+        {
+         "Input": 1
+        }
+       ]
+      }
+     },
+     {
+      "MoveCall": {
+       "package": "0xeb14978abfe93a37c5d5bf86a0623b923553a5f0e794daac7724f1e2fdbfb830",
+       "module": "deposit_for_burn",
+       "function": "deposit_for_burn",
+       "typeArguments": [
+        "0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC"
+       ],
+       "arguments": [
+        {
+         "NestedResult": [
+          0,
+          0
+         ]
+        },
+        {
+         "Input": 2
+        },
+        {
+         "Input": 3
+        },
+        {
+         "Input": 4
+        },
+        {
+         "Input": 5
+        },
+        {
+         "Input": 6
+        },
+        {
+         "Input": 7
+        },
+        {
+         "Input": 8
+        }
+       ]
+      }
+     },
+     {
+      "MoveCall": {
+       "package": "0x185ed207c4d64fc594882ab927f9f3c6ff957aad03df8a731ba64378faeeb2bf",
+       "module": "handler",
+       "function": "burn",
+       "typeArguments": [],
+       "arguments": [
+        {
+         "Input": 9
+        },
+        {
+         "NestedResult": [
+          1,
+          0
+         ]
+        },
+        {
+         "NestedResult": [
+          1,
+          1
+         ]
+        },
+        {
+         "Input": 10
+        },
+        {
+         "Input": 11
+        }
+       ]
+      }
+     },
+     {
+      "MoveCall": {
+       "package": "0xeb14978abfe93a37c5d5bf86a0623b923553a5f0e794daac7724f1e2fdbfb830",
+       "module": "deposit_for_burn",
+       "function": "complete_burn",
+       "typeArguments": [
+        "0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC",
+        "0x185ed207c4d64fc594882ab927f9f3c6ff957aad03df8a731ba64378faeeb2bf::handler::Auth"
+       ],
+       "arguments": [
+        {
+         "NestedResult": [
+          2,
+          0
+         ]
+        },
+        {
+         "Input": 8
+        },
+        {
+         "Input": 12
+        }
+       ]
+      }
+     }
+    ]
+   }
+  },
+  {
+   "name": "address balance only: redeem exactly the amount",
+   "input": {
+    "coins": [],
+    "addressBalance": "10000000",
+    "amount": "2000000"
+   },
+   "expected": {
+    "version": 2,
+    "sender": "0x5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e",
+    "expiration": null,
+    "gasData": {
+     "budget": null,
+     "price": null,
+     "owner": null,
+     "payment": null
+    },
+    "inputs": [
+     {
+      "FundsWithdrawal": {
+       "reservation": {
+        "MaxAmountU64": "2000000",
+        "$kind": "MaxAmountU64"
+       },
+       "typeArg": {
+        "Balance": "0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC",
+        "$kind": "Balance"
+       },
+       "withdrawFrom": {
+        "Sender": true,
+        "$kind": "Sender"
+       }
+      }
+     },
+     {
+      "Pure": {
+       "bytes": "GgAAAA=="
+      }
+     },
+     {
+      "Pure": {
+       "bytes": "AAAAAAAAAAAAAAAAn/uH3Gnu6rjxy7hkbean9pooTaY="
+      }
+     },
+     {
+      "Pure": {
+       "bytes": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+      }
+     },
+     {
+      "Pure": {
+       "bytes": "EIsAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+      }
+     },
+     {
+      "Pure": {
+       "bytes": "0AcAAA=="
+      }
+     },
+     {
+      "Pure": {
+       "bytes": "IGNjdHAtZm9yd2FyZAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+      }
+     },
+     {
+      "UnresolvedObject": {
+       "objectId": "0x06fb166941cd7bc095edc019d054a753ec3f1e4c25f28f2ecc4a6cfa0a9b1167"
+      }
+     },
+     {
+      "UnresolvedObject": {
+       "objectId": "0xa32de8a6dd0178fb05f662929d55cddb69a25c26bde4b83f89e36d17ead94c41"
+      }
+     },
+     {
+      "UnresolvedObject": {
+       "objectId": "0x0000000000000000000000000000000000000000000000000000000000000403"
+      }
+     },
+     {
+      "UnresolvedObject": {
+       "objectId": "0x57d6725e7a8b49a7b2a612f6bd66ab5f39fc95332ca48be421c3229d514a6de7"
+      }
+     },
+     {
+      "UnresolvedObject": {
+       "objectId": "0x0c067f7d325e5b60e3179712e7783534ba1556cbb3d359d8161497e37689230c"
+      }
+     }
+    ],
+    "commands": [
+     {
+      "MoveCall": {
+       "package": "0x0000000000000000000000000000000000000000000000000000000000000002",
+       "module": "coin",
+       "function": "redeem_funds",
+       "typeArguments": [
+        "0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC"
+       ],
+       "arguments": [
+        {
+         "Input": 0
+        }
+       ]
+      }
+     },
+     {
+      "MoveCall": {
+       "package": "0xeb14978abfe93a37c5d5bf86a0623b923553a5f0e794daac7724f1e2fdbfb830",
+       "module": "deposit_for_burn",
+       "function": "deposit_for_burn",
+       "typeArguments": [
+        "0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC"
+       ],
+       "arguments": [
+        {
+         "NestedResult": [
+          0,
+          0
+         ]
+        },
+        {
+         "Input": 1
+        },
+        {
+         "Input": 2
+        },
+        {
+         "Input": 3
+        },
+        {
+         "Input": 4
+        },
+        {
+         "Input": 5
+        },
+        {
+         "Input": 6
+        },
+        {
+         "Input": 7
+        }
+       ]
+      }
+     },
+     {
+      "MoveCall": {
+       "package": "0x185ed207c4d64fc594882ab927f9f3c6ff957aad03df8a731ba64378faeeb2bf",
+       "module": "handler",
+       "function": "burn",
+       "typeArguments": [],
+       "arguments": [
+        {
+         "Input": 8
+        },
+        {
+         "NestedResult": [
+          1,
+          0
+         ]
+        },
+        {
+         "NestedResult": [
+          1,
+          1
+         ]
+        },
+        {
+         "Input": 9
+        },
+        {
+         "Input": 10
+        }
+       ]
+      }
+     },
+     {
+      "MoveCall": {
+       "package": "0xeb14978abfe93a37c5d5bf86a0623b923553a5f0e794daac7724f1e2fdbfb830",
+       "module": "deposit_for_burn",
+       "function": "complete_burn",
+       "typeArguments": [
+        "0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC",
+        "0x185ed207c4d64fc594882ab927f9f3c6ff957aad03df8a731ba64378faeeb2bf::handler::Auth"
+       ],
+       "arguments": [
+        {
+         "NestedResult": [
+          2,
+          0
+         ]
+        },
+        {
+         "Input": 7
+        },
+        {
+         "Input": 11
+        }
+       ]
+      }
+     }
+    ]
+   }
+  },
+  {
+   "name": "coins plus address balance: merge, redeem the rest, split",
+   "input": {
+    "coins": [
+     {
+      "id": "0xa1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+      "balance": "1500000"
+     },
+     {
+      "id": "0xb2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+      "balance": "700000"
+     }
+    ],
+    "addressBalance": "5000000",
+    "amount": "4000000"
+   },
+   "expected": {
+    "version": 2,
+    "sender": "0x5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e",
+    "expiration": null,
+    "gasData": {
+     "budget": null,
+     "price": null,
+     "owner": null,
+     "payment": null
+    },
+    "inputs": [
+     {
+      "UnresolvedObject": {
+       "objectId": "0xa1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+      }
+     },
+     {
+      "UnresolvedObject": {
+       "objectId": "0xb2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"
+      }
+     },
+     {
+      "FundsWithdrawal": {
+       "reservation": {
+        "MaxAmountU64": "1800000",
+        "$kind": "MaxAmountU64"
+       },
+       "typeArg": {
+        "Balance": "0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC",
+        "$kind": "Balance"
+       },
+       "withdrawFrom": {
+        "Sender": true,
+        "$kind": "Sender"
+       }
+      }
+     },
+     {
+      "Pure": {
+       "bytes": "GgAAAA=="
+      }
+     },
+     {
+      "Pure": {
+       "bytes": "AAAAAAAAAAAAAAAAn/uH3Gnu6rjxy7hkbean9pooTaY="
+      }
+     },
+     {
+      "Pure": {
+       "bytes": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+      }
+     },
+     {
+      "Pure": {
+       "bytes": "EIsAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+      }
+     },
+     {
+      "Pure": {
+       "bytes": "0AcAAA=="
+      }
+     },
+     {
+      "Pure": {
+       "bytes": "IGNjdHAtZm9yd2FyZAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+      }
+     },
+     {
+      "UnresolvedObject": {
+       "objectId": "0x06fb166941cd7bc095edc019d054a753ec3f1e4c25f28f2ecc4a6cfa0a9b1167"
+      }
+     },
+     {
+      "UnresolvedObject": {
+       "objectId": "0xa32de8a6dd0178fb05f662929d55cddb69a25c26bde4b83f89e36d17ead94c41"
+      }
+     },
+     {
+      "UnresolvedObject": {
+       "objectId": "0x0000000000000000000000000000000000000000000000000000000000000403"
+      }
+     },
+     {
+      "UnresolvedObject": {
+       "objectId": "0x57d6725e7a8b49a7b2a612f6bd66ab5f39fc95332ca48be421c3229d514a6de7"
+      }
+     },
+     {
+      "UnresolvedObject": {
+       "objectId": "0x0c067f7d325e5b60e3179712e7783534ba1556cbb3d359d8161497e37689230c"
+      }
+     }
+    ],
+    "commands": [
+     {
+      "MoveCall": {
+       "package": "0x0000000000000000000000000000000000000000000000000000000000000002",
+       "module": "coin",
+       "function": "redeem_funds",
+       "typeArguments": [
+        "0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC"
+       ],
+       "arguments": [
+        {
+         "Input": 2
+        }
+       ]
+      }
+     },
+     {
+      "MergeCoins": {
+       "destination": {
+        "Input": 0
+       },
+       "sources": [
+        {
+         "Input": 1
+        },
+        {
+         "NestedResult": [
+          0,
+          0
+         ]
+        }
+       ]
+      }
+     },
+     {
+      "MoveCall": {
+       "package": "0xeb14978abfe93a37c5d5bf86a0623b923553a5f0e794daac7724f1e2fdbfb830",
+       "module": "deposit_for_burn",
+       "function": "deposit_for_burn",
+       "typeArguments": [
+        "0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC"
+       ],
+       "arguments": [
+        {
+         "Input": 0
+        },
+        {
+         "Input": 3
+        },
+        {
+         "Input": 4
+        },
+        {
+         "Input": 5
+        },
+        {
+         "Input": 6
+        },
+        {
+         "Input": 7
+        },
+        {
+         "Input": 8
+        },
+        {
+         "Input": 9
+        }
+       ]
+      }
+     },
+     {
+      "MoveCall": {
+       "package": "0x185ed207c4d64fc594882ab927f9f3c6ff957aad03df8a731ba64378faeeb2bf",
+       "module": "handler",
+       "function": "burn",
+       "typeArguments": [],
+       "arguments": [
+        {
+         "Input": 10
+        },
+        {
+         "NestedResult": [
+          2,
+          0
+         ]
+        },
+        {
+         "NestedResult": [
+          2,
+          1
+         ]
+        },
+        {
+         "Input": 11
+        },
+        {
+         "Input": 12
+        }
+       ]
+      }
+     },
+     {
+      "MoveCall": {
+       "package": "0xeb14978abfe93a37c5d5bf86a0623b923553a5f0e794daac7724f1e2fdbfb830",
+       "module": "deposit_for_burn",
+       "function": "complete_burn",
+       "typeArguments": [
+        "0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC",
+        "0x185ed207c4d64fc594882ab927f9f3c6ff957aad03df8a731ba64378faeeb2bf::handler::Auth"
+       ],
+       "arguments": [
+        {
+         "NestedResult": [
+          3,
+          0
+         ]
+        },
+        {
+         "Input": 9
+        },
+        {
+         "Input": 13
+        }
+       ]
+      }
+     }
+    ]
+   }
+  },
+  {
+   "name": "a coin equal to the amount is burned whole",
+   "input": {
+    "coins": [
+     {
+      "id": "0xa1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+      "balance": "2000000"
+     }
+    ],
+    "addressBalance": "0",
+    "amount": "2000000"
+   },
+   "expected": {
+    "version": 2,
+    "sender": "0x5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e",
+    "expiration": null,
+    "gasData": {
+     "budget": null,
+     "price": null,
+     "owner": null,
+     "payment": null
+    },
+    "inputs": [
+     {
+      "UnresolvedObject": {
+       "objectId": "0xa1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+      }
+     },
+     {
+      "Pure": {
+       "bytes": "GgAAAA=="
+      }
+     },
+     {
+      "Pure": {
+       "bytes": "AAAAAAAAAAAAAAAAn/uH3Gnu6rjxy7hkbean9pooTaY="
+      }
+     },
+     {
+      "Pure": {
+       "bytes": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+      }
+     },
+     {
+      "Pure": {
+       "bytes": "EIsAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+      }
+     },
+     {
+      "Pure": {
+       "bytes": "0AcAAA=="
+      }
+     },
+     {
+      "Pure": {
+       "bytes": "IGNjdHAtZm9yd2FyZAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+      }
+     },
+     {
+      "UnresolvedObject": {
+       "objectId": "0x06fb166941cd7bc095edc019d054a753ec3f1e4c25f28f2ecc4a6cfa0a9b1167"
+      }
+     },
+     {
+      "UnresolvedObject": {
+       "objectId": "0xa32de8a6dd0178fb05f662929d55cddb69a25c26bde4b83f89e36d17ead94c41"
+      }
+     },
+     {
+      "UnresolvedObject": {
+       "objectId": "0x0000000000000000000000000000000000000000000000000000000000000403"
+      }
+     },
+     {
+      "UnresolvedObject": {
+       "objectId": "0x57d6725e7a8b49a7b2a612f6bd66ab5f39fc95332ca48be421c3229d514a6de7"
+      }
+     },
+     {
+      "UnresolvedObject": {
+       "objectId": "0x0c067f7d325e5b60e3179712e7783534ba1556cbb3d359d8161497e37689230c"
+      }
+     }
+    ],
+    "commands": [
+     {
+      "MoveCall": {
+       "package": "0xeb14978abfe93a37c5d5bf86a0623b923553a5f0e794daac7724f1e2fdbfb830",
+       "module": "deposit_for_burn",
+       "function": "deposit_for_burn",
+       "typeArguments": [
+        "0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC"
+       ],
+       "arguments": [
+        {
+         "Input": 0
+        },
+        {
+         "Input": 1
+        },
+        {
+         "Input": 2
+        },
+        {
+         "Input": 3
+        },
+        {
+         "Input": 4
+        },
+        {
+         "Input": 5
+        },
+        {
+         "Input": 6
+        },
+        {
+         "Input": 7
+        }
+       ]
+      }
+     },
+     {
+      "MoveCall": {
+       "package": "0x185ed207c4d64fc594882ab927f9f3c6ff957aad03df8a731ba64378faeeb2bf",
+       "module": "handler",
+       "function": "burn",
+       "typeArguments": [],
+       "arguments": [
+        {
+         "Input": 8
+        },
+        {
+         "NestedResult": [
+          0,
+          0
+         ]
+        },
+        {
+         "NestedResult": [
+          0,
+          1
+         ]
+        },
+        {
+         "Input": 9
+        },
+        {
+         "Input": 10
+        }
+       ]
+      }
+     },
+     {
+      "MoveCall": {
+       "package": "0xeb14978abfe93a37c5d5bf86a0623b923553a5f0e794daac7724f1e2fdbfb830",
+       "module": "deposit_for_burn",
+       "function": "complete_burn",
+       "typeArguments": [
+        "0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC",
+        "0x185ed207c4d64fc594882ab927f9f3c6ff957aad03df8a731ba64378faeeb2bf::handler::Auth"
+       ],
+       "arguments": [
+        {
+         "NestedResult": [
+          1,
+          0
+         ]
+        },
+        {
+         "Input": 7
+        },
+        {
+         "Input": 11
+        }
+       ]
+      }
+     }
+    ]
+   }
+  },
+  {
+   "name": "several coins, no address balance needed",
+   "input": {
+    "coins": [
+     {
+      "id": "0xa1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+      "balance": "2000000"
+     },
+     {
+      "id": "0xb2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+      "balance": "3000000"
+     }
+    ],
+    "addressBalance": "0",
+    "amount": "4500000"
+   },
+   "expected": {
+    "version": 2,
+    "sender": "0x5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e",
+    "expiration": null,
+    "gasData": {
+     "budget": null,
+     "price": null,
+     "owner": null,
+     "payment": null
+    },
+    "inputs": [
+     {
+      "UnresolvedObject": {
+       "objectId": "0xb2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"
+      }
+     },
+     {
+      "UnresolvedObject": {
+       "objectId": "0xa1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+      }
+     },
+     {
+      "Pure": {
+       "bytes": "IKpEAAAAAAA="
+      }
+     },
+     {
+      "Pure": {
+       "bytes": "GgAAAA=="
+      }
+     },
+     {
+      "Pure": {
+       "bytes": "AAAAAAAAAAAAAAAAn/uH3Gnu6rjxy7hkbean9pooTaY="
+      }
+     },
+     {
+      "Pure": {
+       "bytes": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+      }
+     },
+     {
+      "Pure": {
+       "bytes": "EIsAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+      }
+     },
+     {
+      "Pure": {
+       "bytes": "0AcAAA=="
+      }
+     },
+     {
+      "Pure": {
+       "bytes": "IGNjdHAtZm9yd2FyZAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+      }
+     },
+     {
+      "UnresolvedObject": {
+       "objectId": "0x06fb166941cd7bc095edc019d054a753ec3f1e4c25f28f2ecc4a6cfa0a9b1167"
+      }
+     },
+     {
+      "UnresolvedObject": {
+       "objectId": "0xa32de8a6dd0178fb05f662929d55cddb69a25c26bde4b83f89e36d17ead94c41"
+      }
+     },
+     {
+      "UnresolvedObject": {
+       "objectId": "0x0000000000000000000000000000000000000000000000000000000000000403"
+      }
+     },
+     {
+      "UnresolvedObject": {
+       "objectId": "0x57d6725e7a8b49a7b2a612f6bd66ab5f39fc95332ca48be421c3229d514a6de7"
+      }
+     },
+     {
+      "UnresolvedObject": {
+       "objectId": "0x0c067f7d325e5b60e3179712e7783534ba1556cbb3d359d8161497e37689230c"
+      }
+     }
+    ],
+    "commands": [
+     {
+      "MergeCoins": {
+       "destination": {
+        "Input": 0
+       },
+       "sources": [
+        {
+         "Input": 1
+        }
+       ]
+      }
+     },
+     {
+      "SplitCoins": {
+       "coin": {
+        "Input": 0
+       },
+       "amounts": [
+        {
+         "Input": 2
+        }
+       ]
+      }
+     },
+     {
+      "MoveCall": {
+       "package": "0xeb14978abfe93a37c5d5bf86a0623b923553a5f0e794daac7724f1e2fdbfb830",
+       "module": "deposit_for_burn",
+       "function": "deposit_for_burn",
+       "typeArguments": [
+        "0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC"
+       ],
+       "arguments": [
+        {
+         "NestedResult": [
+          1,
+          0
+         ]
+        },
+        {
+         "Input": 3
+        },
+        {
+         "Input": 4
+        },
+        {
+         "Input": 5
+        },
+        {
+         "Input": 6
+        },
+        {
+         "Input": 7
+        },
+        {
+         "Input": 8
+        },
+        {
+         "Input": 9
+        }
+       ]
+      }
+     },
+     {
+      "MoveCall": {
+       "package": "0x185ed207c4d64fc594882ab927f9f3c6ff957aad03df8a731ba64378faeeb2bf",
+       "module": "handler",
+       "function": "burn",
+       "typeArguments": [],
+       "arguments": [
+        {
+         "Input": 10
+        },
+        {
+         "NestedResult": [
+          2,
+          0
+         ]
+        },
+        {
+         "NestedResult": [
+          2,
+          1
+         ]
+        },
+        {
+         "Input": 11
+        },
+        {
+         "Input": 12
+        }
+       ]
+      }
+     },
+     {
+      "MoveCall": {
+       "package": "0xeb14978abfe93a37c5d5bf86a0623b923553a5f0e794daac7724f1e2fdbfb830",
+       "module": "deposit_for_burn",
+       "function": "complete_burn",
+       "typeArguments": [
+        "0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC",
+        "0x185ed207c4d64fc594882ab927f9f3c6ff957aad03df8a731ba64378faeeb2bf::handler::Auth"
+       ],
+       "arguments": [
+        {
+         "NestedResult": [
+          3,
+          0
+         ]
+        },
+        {
+         "Input": 9
+        },
+        {
+         "Input": 13
+        }
+       ]
+      }
+     }
+    ]
+   }
+  }
+ ]
+}

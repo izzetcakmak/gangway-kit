@@ -1,12 +1,12 @@
 {
   "name": "gangway-kit",
-  "version": "0.5.2",
-  "description": "GangWay Kit — drop-in 'bridge USDC to Arc' widget + headless engine on Circle CCTP V2 with the Forwarding Service (no gas needed on Arc).",
+  "version": "0.6.0",
+  "description": "GangWay Kit — drop-in 'bridge USDC to Arc' widget + headless engine on Circle CCTP V2 with the Forwarding Service (no gas needed on Arc). EVM chains, Solana and Sui as sources.",
   "main": "gangway-kit.js",
   "browser": "gangway-kit.js",
   "files": ["gangway-kit.js", "README.md", "LICENSE"],
   "scripts": {
-    "test": "node --test test/unit.test.mjs",
+    "test": "node --test test/unit.test.mjs test/sui.test.mjs",
     "preflight": "node test/preflight.mjs",
     "preflight:mainnet": "node test/preflight.mjs mainnet",
     "demo": "npx --yes serve -l 4173 ."
@@ -14,7 +14,7 @@
   "peerDependencies": {
     "ethers": "^6.0.0"
   },
-  "keywords": ["arc", "circle", "cctp", "usdc", "bridge", "forwarding-service", "ethers"],
+  "keywords": ["arc", "circle", "cctp", "usdc", "bridge", "forwarding-service", "ethers", "sui", "solana"],
   "author": "izzetcakmak",
   "license": "MIT",
   "repository": { "type": "git", "url": "https://github.com/izzetcakmak/gangway-kit" }

@@ -13,18 +13,22 @@ Swaps by **LI.FI**, bridging by **Circle CCTP V2 + Forwarding Service**, an opti
   quote; the day LI.FI opens Arc, any-token → USDC-on-Arc becomes one LI.FI transaction and CCTP
   stays as the fallback. Nothing to redeploy.
 - **Fast Transfer** (~20 s) or **Standard** (no protocol fee, source-chain finality).
-- **15 mainnet / 13 testnet source chains**: Base, Ethereum, Arbitrum, OP, Polygon, Avalanche,
-  Unichain, Linea, World Chain, Sonic, Monad, Sei, HyperEVM, Ink (+ their testnets), and **Solana**.
+- **16 mainnet / 13 testnet source chains**: Base, Ethereum, Arbitrum, OP, Polygon, Avalanche,
+  Unichain, Linea, World Chain, Sonic, Monad, Sei, HyperEVM, Ink (+ their testnets), **Solana** and **Sui**.
 - **Solana, no Solana library**: SOL or any Solana token becomes USDC on Arc in one LI.FI route
   (Relay underneath; ~1 s). The user's Wallet Standard wallet (Phantom, Solflare, Backpack…) signs
   the bytes LI.FI returns, so nothing from `@solana/*` is bundled. See "Solana" below.
+- **Sui, no Sui library**: USDC (or SUI and other Sui tokens, swapped into USDC first by LI.FI) goes over
+  Circle CCTP V2 on Sui (live 8 Oct 2026) with the Forwarding Service: one programmable transaction the
+  kit builds as JSON, signed by a Wallet Standard wallet (Slush, Phantom, Suiet…), standard finality in
+  about half a second. See "Sui" below.
 - **Resumable**: in-flight transfers survive a page refresh; if the forwarder is late the
   attested message can be minted manually from the user's wallet.
 - **Zero dependencies** besides ethers v6, which you already load. One file, ~30 KB, classic
   `<script>` or CommonJS. Themes itself from the host's CSS variables.
 
 Every contract address, domain ID and RPC in the kit is verified live by `npm run preflight`
-(see below). Verified 13 Sep 2026 against Circle docs + on-chain reads.
+(see below). Verified 13 Sep 2026 against Circle docs + on-chain reads; the Sui packages 10 Oct 2026.
 
 ## Quick start
 
@@ -98,9 +102,11 @@ A swap that went through while the page was closed is not lost: the transfer sho
 | `onEvent` | `(evt) => void` | every step: `switching, planning, approving, approve_sent, approved, burning, burn_sent, burned, attesting, attested, forwarding, minted, stalled, error` |
 | `onMinted` | `(transfer) => void` | fired when USDC lands on Arc |
 | `solanaWallet` | Wallet Standard wallet \| `() => wallet` | which wallet signs on Solana; by default the wallets installed in the browser are discovered |
+| `suiWallet` | Wallet Standard wallet \| `() => wallet` | which wallet signs on Sui; by default the wallets installed in the browser are discovered |
+| `suiPollMs` | number | how often to ask Sui about a transaction or balance that is not indexed yet, default `1500` |
 | `title` | string | header text |
 
-Returned handle: `{ core, account, solanaAccount, setAccount(a), setSource(key), setAmount(v), refresh(), destroy() }`.
+Returned handle: `{ core, account, solanaAccount, suiAccount, setAccount(a), setSource(key), setAmount(v), refresh(), destroy() }`.
 
 ## Solana
 
@@ -121,6 +127,51 @@ Solana is a source like any other in the list, with three differences:
 Headless: `await core.connectSolana()` (or `connectSolana(wallet, { silent: true })`), then
 `core.bridge({ source: "solana", payToken: Kit.SOL_NATIVE, amount, recipient })` and `track()` as
 usual. Balances: `core.tokenBalance("solana", mintOrSOL_NATIVE, base58Owner)`.
+
+## Sui
+
+Sui is a source with a bridge leg of its own: Circle's CCTP V2 went live there on 8 Oct 2026
+(domain 8), so unlike Solana the payment does not need LI.FI to cross to Arc.
+
+- **CCTP, with the Forwarding Service.** The burn is one programmable transaction (PTB) calling
+  Circle's Move packages (`deposit_for_burn`, `handler::burn`, `complete_burn`) with the
+  `cctp-forward` hook, so Circle mints on Arc itself and the user needs no gas there. Standard
+  finality (about half a second on Sui, no Fast Transfer; real forwarded transfers took 4-10 s from burn to
+  mint), protocol fee 0, plus the Forwarding fee
+  (0.016-0.018 USDC when checked). Circle's Iris tracks it by the Sui digest, so `track()` is the same code
+  path as for any EVM source.
+- **Pay with SUI or another Sui token.** LI.FI swaps it into USDC on Sui first (same-chain, there
+  is no LI.FI route from Sui into Arc), signed from the base64 bytes it returns: two signatures,
+  swap then burn. The "pay with" list is a pinned set of coin types, because LI.FI lists look-alikes
+  (three USDC, three USDT) under one symbol on Sui. Only a type LI.FI lists is offered.
+- **No Sui library.** The wallet is a Wallet Standard wallet (Slush, Phantom, Suiet, Backpack…;
+  `sui:signAndExecuteTransaction`, falling back to `sui:signTransaction` + GraphQL
+  `executeTransaction`). The transaction JSON is built here (`utils.buildSuiBurnTx`) and matches
+  what `@mysten/sui`'s `transaction.toJSON()` prints, byte for byte: `test/fixtures/sui-burn.json`
+  holds the SDK's own output and `test/sui-parity.mjs` regenerates and compares it.
+- **Coins and address balances.** USDC is taken from the owner's coin objects first (every wallet
+  understands them); only what they do not cover is redeemed from the SIP-58 address balance
+  (`0x2::coin::redeem_funds`).
+- **Reads go to GraphQL**, `graphql.mainnet.sui.io` (CORS open): Sui switched public JSON-RPC off
+  in 2026. Balances, coin objects, transaction status and Circle's pause flag are read there.
+- **The network fee is paid in SUI** (about 0.005 SUI before the storage rebate); the widget asks
+  for about 0.01 SUI to be present and says so, rather than let the wallet fail.
+- **The USDC lands at an EVM address**, as from Solana: the connected EVM account or the one typed
+  into "send to another address".
+- **Testnet.** Circle's sandbox Iris does not quote a forwarded route from Sui yet (checked
+  10 Oct 2026), so `SOURCES.testnet` has no Sui; `Kit.SUI_TESTNET_SOURCE` carries the testnet
+  packages for `opts.sources` when it does.
+
+Headless: `await core.connectSui()` (or `connectSui(wallet, { silent: true })`), then
+`core.bridge({ source: "sui", payToken: sui.usdc /* or Kit.SUI_NATIVE */, amount, recipient })` and
+`track()` as usual. Balances: `core.tokenBalance("sui", coinType, suiAddress)` (coin objects plus
+address balance). `opts.suiWallet` names the wallet; `opts.suiPollMs` sets how often Sui's index is
+asked about a transaction that is not there yet.
+
+Check a transaction before anyone signs it (needs `npm i --no-save @mysten/sui`): 
+`node test/sui-simulate.mjs <sui address> <usdc amount>` builds the exact JSON the kit would hand
+that account's wallet, resolves it with the SDK the way a wallet does and dry-runs it on Sui
+mainnet. Nothing is signed or sent.
 
 ## Bridge → swap on Arc (`destination`)
 
@@ -174,7 +225,7 @@ The widget reads the host's tokens with fallbacks: `--accent`, `--surface`, `--s
 ## Scripts
 
 ```
-npm test                 # unit tests (fee maths, encoding, chain tables, LI.FI helpers)
+npm test                 # unit tests (fee maths, encoding, chain tables, LI.FI helpers, the Sui flow against a fake wallet)
 npm run preflight        # live read-only check of every testnet chain + Iris quotes (add --lifi for LI.FI lines)
 npm run preflight:mainnet
 ```

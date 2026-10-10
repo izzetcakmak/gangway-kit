@@ -29,6 +29,7 @@ test("source chain tables are internally consistent", () => {
       assert.ok(!seenId.has(c.chainId), `dup chainId ${c.chainId}`); seenId.add(c.chainId);
       assert.ok(!seenDomain.has(c.domain), `dup domain ${c.domain}`); seenDomain.add(c.domain);
       if (c.vm === "svm") assert.ok(Kit.utils.isSolAddress(c.usdc), `${c.key} usdc mint`);
+      else if (c.vm === "move") assert.match(c.usdc, /^0x[0-9a-f]{64}::usdc::USDC$/, `${c.key} usdc coin type`);
       else assert.ok(isAddress(c.usdc), `${c.key} usdc`);
       assert.ok(c.rpcs.length >= 1, `${c.key} needs a read RPC`);
       assert.ok(c.explorer.startsWith("https://"), `${c.key} explorer`);
